@@ -1,0 +1,246 @@
+openapi: "3.0.3"
+info:
+  title: 宠物商店API
+  description: 一个示例宠物商店API，用于演示API测试用例自动生成
+  version: "1.0.0"
+
+servers:
+  - url: http://localhost:8080/api/v1
+
+paths:
+  /pets:
+    get:
+      tags:
+        - pets
+      summary: 获取宠物列表
+      description: 分页获取宠物列表，支持按状态和标签过滤
+      parameters:
+        - name: status
+          in: query
+          description: 宠物状态过滤
+          required: false
+          schema:
+            type: string
+            enum: ["available", "pending", "sold"]
+        - name: tag
+          in: query
+          description: 按标签过滤
+          required: false
+          schema:
+            type: string
+        - name: page
+          in: query
+          description: 页码
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 1
+        - name: page_size
+          in: query
+          description: 每页数量
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        "200":
+          description: 成功返回宠物列表
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total:
+                    type: integer
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Pet"
+
+    post:
+      tags:
+        - pets
+      summary: 创建宠物
+      description: 创建一个新的宠物记录
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+                - species
+              properties:
+                name:
+                  type: string
+                  description: 宠物名称
+                  minLength: 1
+                  maxLength: 50
+                  example: "小白"
+                species:
+                  type: string
+                  description: 物种
+                  enum: ["dog", "cat", "bird", "fish", "other"]
+                  example: "dog"
+                age:
+                  type: integer
+                  description: 年龄（月）
+                  minimum: 0
+                  maximum: 360
+                  example: 12
+                weight:
+                  type: number
+                  description: 体重（kg）
+                  minimum: 0.01
+                  maximum: 200
+                  example: 5.5
+                color:
+                  type: string
+                  description: 颜色
+                  maxLength: 20
+                  example: "白色"
+                owner_email:
+                  type: string
+                  format: email
+                  description: 主人邮箱
+                  example: "owner@example.com"
+                tags:
+                  type: array
+                  description: 标签
+                  items:
+                    type: string
+                  example: ["可爱", "活泼"]
+      responses:
+        "201":
+          description: 创建成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Pet"
+        "400":
+          description: 参数错误
+
+  /pets/{petId}:
+    get:
+      tags:
+        - pets
+      summary: 获取宠物详情
+      description: 根据ID获取单个宠物的详细信息
+      parameters:
+        - name: petId
+          in: path
+          required: true
+          description: 宠物ID
+          schema:
+            type: integer
+            minimum: 1
+            example: 1
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Pet"
+        "404":
+          description: 宠物不存在
+
+    put:
+      tags:
+        - pets
+      summary: 更新宠物信息
+      description: 更新指定ID的宠物信息
+      parameters:
+        - name: petId
+          in: path
+          required: true
+          description: 宠物ID
+          schema:
+            type: integer
+            minimum: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 50
+                age:
+                  type: integer
+                  minimum: 0
+                  maximum: 360
+                weight:
+                  type: number
+                  minimum: 0.01
+                  maximum: 200
+                status:
+                  type: string
+                  enum: ["available", "pending", "sold"]
+      responses:
+        "200":
+          description: 更新成功
+        "400":
+          description: 参数错误
+        "404":
+          description: 宠物不存在
+
+    delete:
+      tags:
+        - pets
+      summary: 删除宠物
+      description: 根据ID删除宠物
+      parameters:
+        - name: petId
+          in: path
+          required: true
+          description: 宠物ID
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        "204":
+          description: 删除成功
+        "404":
+          description: 宠物不存在
+
+components:
+  schemas:
+    Pet:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        species:
+          type: string
+        age:
+          type: integer
+        weight:
+          type: number
+        color:
+          type: string
+        owner_email:
+          type: string
+          format: email
+        status:
+          type: string
+          enum: ["available", "pending", "sold"]
+        tags:
+          type: array
+          items:
+            type: string
+        created_at:
+          type: string
+          format: date-time
