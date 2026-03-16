@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "apiauto-agent"
+version = "0.1.0"
+description = "API测试用例自动生成与执行Agent"
+requires-python = ">=3.10"
+dependencies = [
+    "pyyaml>=6.0",
+    "requests>=2.28.0",
+]
+
+[project.scripts]
+apiauto-agent = "apiauto_agent.cli:main"
