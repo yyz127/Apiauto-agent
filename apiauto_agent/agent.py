@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .parser import parse_openapi_file, EndpointInfo
-from .generator import generate_test_cases, generate_normal_cases, generate_abnormal_cases, TestCase
+from .generator import TestCase
 from .executor import create_executor
 from .llm_generator import LLMCaseGenerator
 
@@ -102,7 +102,6 @@ class ApiTestAgent:
         api_url: str = "",
         timeout: int = 30,
         headers: dict[str, str] | None = None,
-        case_generator: str = "rule",
         llm_api_url: str = "",
         llm_api_key: str = "",
         llm_model: str = "",
@@ -113,19 +112,14 @@ class ApiTestAgent:
             timeout=timeout,
             headers=headers,
         )
-        if case_generator not in {"rule", "llm"}:
-            raise ValueError("case_generator只支持: rule, llm")
-        self.case_generator = case_generator
-        self.llm_generator = None
-        if case_generator == "llm":
-            if not llm_api_url:
-                raise ValueError("使用llm生成模式时需要提供llm_api_url")
-            self.llm_generator = LLMCaseGenerator(
-                api_url=llm_api_url,
-                api_key=llm_api_key,
-                model=llm_model,
-                timeout=timeout,
-            )
+        if not llm_api_url:
+            raise ValueError("需要提供llm_api_url")
+        self.llm_generator = LLMCaseGenerator(
+            api_url=llm_api_url,
+            api_key=llm_api_key,
+            model=llm_model,
+            timeout=timeout,
+        )
 
     def run(
         self,
@@ -212,17 +206,10 @@ class ApiTestAgent:
         return all_cases
 
     def _generate_cases(self, endpoint: EndpointInfo, case_type: str) -> list[TestCase]:
-        if self.case_generator == "llm" and self.llm_generator is not None:
-            cases = self.llm_generator.generate_cases(endpoint=endpoint, case_type=case_type)
-            if cases:
-                return cases
-            logger.warning("LLM未返回有效用例，降级为规则生成: [%s] %s", endpoint.method, endpoint.path)
-
-        if case_type == "normal":
-            return generate_normal_cases(endpoint)
-        if case_type == "abnormal":
-            return generate_abnormal_cases(endpoint)
-        return generate_test_cases(endpoint)
+        cases = self.llm_generator.generate_cases(endpoint=endpoint, case_type=case_type)
+        if not cases:
+            logger.warning("LLM未返回有效用例: [%s] %s", endpoint.method, endpoint.path)
+        return cases
 
     # ── LangGraph 模式入口 ──
 
@@ -244,7 +231,6 @@ class ApiTestAgent:
         initial_state = create_initial_state(
             yaml_file=str(yaml_file),
             mode="mock" if isinstance(self.executor, _MockExecutorType) else "api",
-            case_generator=self.case_generator,
             api_url=getattr(self.executor, "api_url", ""),
             timeout=getattr(self.executor, "timeout", 30),
             headers=dict(getattr(self.executor, "session", _FakeSession()).headers or {}),

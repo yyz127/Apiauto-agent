@@ -10,12 +10,7 @@ from typing import Any, Literal
 
 from .state import ApiTestState
 from .parser import parse_openapi_file, EndpointInfo, ParameterInfo
-from .generator import (
-    TestCase,
-    generate_test_cases,
-    generate_normal_cases,
-    generate_abnormal_cases,
-)
+from .generator import TestCase
 from .llm_generator import LLMCaseGenerator
 from .executor import create_executor
 
@@ -98,54 +93,24 @@ def select_endpoint(state: ApiTestState) -> dict[str, Any]:
 
 
 def generate_cases(state: ApiTestState) -> dict[str, Any]:
-    """节点：生成测试用例（LLM 优先，可能失败）。"""
+    """节点：使用 LLM 生成测试用例。"""
     endpoint = _dict_to_endpoint(state["current_endpoint"])
     case_type = state.get("case_type", "all")
-    generator_mode = state.get("case_generator", "rule")
 
-    # LLM 模式
-    if generator_mode == "llm" and state.get("llm_api_url"):
-        llm_gen = LLMCaseGenerator(
-            api_url=state["llm_api_url"],
-            api_key=state.get("llm_api_key", ""),
-            model=state.get("llm_model", "gpt-4o-mini"),
-            timeout=state.get("timeout", 30),
-        )
-        cases = llm_gen.generate_cases(endpoint, case_type)
-        if cases:
-            logger.info("LLM 生成 %d 个用例", len(cases))
-            return {
-                "current_cases": [_case_to_dict(c) for c in cases],
-                "generation_failed": False,
-                "generation_method": "llm",
-            }
-        logger.warning("LLM 生成失败，将降级到规则生成")
-        return {
-            "current_cases": [],
-            "generation_failed": True,
-            "generation_method": "llm",
-        }
-
-    # 规则模式
-    cases = _rule_generate(endpoint, case_type)
-    logger.info("规则生成 %d 个用例", len(cases))
+    llm_gen = LLMCaseGenerator(
+        api_url=state["llm_api_url"],
+        api_key=state.get("llm_api_key", ""),
+        model=state.get("llm_model", "gpt-4o-mini"),
+        timeout=state.get("timeout", 60),
+    )
+    cases = llm_gen.generate_cases(endpoint, case_type)
+    if cases:
+        logger.info("LLM 生成 %d 个用例", len(cases))
+    else:
+        logger.warning("LLM 未返回有效用例: [%s] %s", endpoint.method, endpoint.path)
     return {
         "current_cases": [_case_to_dict(c) for c in cases],
-        "generation_failed": False,
-        "generation_method": "rule",
-    }
-
-
-def fallback_rule_gen(state: ApiTestState) -> dict[str, Any]:
-    """节点：LLM 失败后的规则引擎降级生成。"""
-    endpoint = _dict_to_endpoint(state["current_endpoint"])
-    case_type = state.get("case_type", "all")
-    cases = _rule_generate(endpoint, case_type)
-    logger.info("规则降级生成 %d 个用例", len(cases))
-    return {
-        "current_cases": [_case_to_dict(c) for c in cases],
-        "generation_failed": False,
-        "generation_method": "rule_fallback",
+        "generation_method": "llm",
     }
 
 
@@ -235,26 +200,8 @@ def generate_report(state: ApiTestState) -> dict[str, Any]:
 
 # ── 条件边函数 ──
 
-def check_generation(state: ApiTestState) -> Literal["review_cases", "fallback_rule_gen"]:
-    """条件边：检查 LLM 生成是否失败，决定是否降级。"""
-    if state.get("generation_failed"):
-        return "fallback_rule_gen"
-    return "review_cases"
-
-
 def has_more_endpoints(state: ApiTestState) -> Literal["select_endpoint", "generate_report"]:
     """条件边：判断是否还有更多接口需要处理。"""
     if state["current_index"] < len(state["endpoints"]):
         return "select_endpoint"
     return "generate_report"
-
-
-# ── 内部辅助 ──
-
-def _rule_generate(endpoint: EndpointInfo, case_type: str) -> list[TestCase]:
-    """按 case_type 调用对应的规则生成函数。"""
-    if case_type == "normal":
-        return generate_normal_cases(endpoint)
-    if case_type == "abnormal":
-        return generate_abnormal_cases(endpoint)
-    return generate_test_cases(endpoint)
