@@ -25,6 +25,7 @@ SYSTEM_PROMPT = """\
 - description: 用例说明，解释测试意图
 - case_type: "normal" 或 "abnormal"
 - parameters: 请求参数字典（key-value），只包含需要发送的参数
+- headers: 请求头字典（key-value），包含 Content-Type 和认证头
 - expected_status: 期望的 HTTP 状态码（整数）
 
 ## 正常用例覆盖策略（case_type="normal"）
@@ -42,6 +43,11 @@ SYSTEM_PROMPT = """\
 6. **枚举外值**：enum 参数传不在枚举列表中的值，期望 400/422
 7. **安全测试**：XSS 注入 (<script>alert(1)</script>)、SQL 注入 (' OR 1=1 --)，期望 400
 8. **极端值**：超大整数 (2147483648)、超长字符串 (1000+字符)、负数，期望 400
+
+## 认证与请求头
+- 如果接口定义了安全认证要求（如 API Key、Bearer Token、Cookie 等），必须在每个用例的 headers 中包含对应的认证头
+- 认证头的值使用占位符格式：`<请输入{认证类型}>`，例如 `"Authorization": "Bearer <请输入Token>"`、`"Cookie": "XingheToken=<请输入Token>"`
+- 所有用例的 headers 至少包含 `Content-Type`
 
 ## 注意事项
 - 每个用例的 parameters 必须是可直接发送的参数字典
@@ -160,6 +166,24 @@ class LLMCaseGenerator:
         if responses_desc:
             endpoint_desc["responses"] = responses_desc
 
+        # 构建安全认证信息
+        if endpoint.security and endpoint.security_schemes:
+            security_desc = []
+            for sec_req in endpoint.security:
+                for scheme_name in sec_req:
+                    scheme = endpoint.security_schemes.get(scheme_name, {})
+                    if scheme:
+                        security_desc.append({
+                            "name": scheme_name,
+                            "type": scheme.get("type", ""),
+                            "scheme": scheme.get("scheme", ""),
+                            "in": scheme.get("in", ""),
+                            "paramName": scheme.get("name", ""),
+                            "description": scheme.get("description", ""),
+                        })
+            if security_desc:
+                endpoint_desc["security"] = security_desc
+
         # 构建用户提示词
         case_type_instruction = {
             "all": "请同时生成正常用例和异常用例，确保全面覆盖。",
@@ -197,6 +221,7 @@ class LLMCaseGenerator:
                 method=endpoint.method,
                 case_type=item.get("case_type", "normal"),
                 parameters=item.get("parameters", {}) or {},
+                headers=item.get("headers", {}) or {},
                 expected_status=item.get("expected_status"),
             ))
         return test_cases

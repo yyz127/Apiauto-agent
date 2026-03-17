@@ -74,6 +74,14 @@ def main():
                         help="大模型名称，默认gpt-4o-mini")
     parser.add_argument("--human-review", action="store_true",
                         help="启用人工审核")
+    parser.add_argument("--uuid", default="",
+                        help="测试任务唯一标识（mode=api时使用，不传则自动生成）")
+    parser.add_argument("--env", default="",
+                        help="环境标识: dev, uat, test（mode=api时使用）")
+    parser.add_argument("--target-base-url", default="",
+                        help="被测接口的基础URL（mode=api时使用，如 http://localhost:8080）")
+    parser.add_argument("--target-headers", default="",
+                        help="被测接口的请求头（JSON字符串），如 '{\"Cookie\":\"XingheToken=xxx\"}'")
 
     args = parser.parse_args()
     setup_logging(args.verbose)
@@ -84,6 +92,21 @@ def main():
         print(f"错误: 文件不存在: {args.yaml_file}", file=sys.stderr)
         sys.exit(1)
 
+    # 自动生成 uuid（如果未指定且为 api 模式，使用基于时间的 UUID v1）
+    task_uuid = args.uuid
+    if not task_uuid and args.mode == "api":
+        import uuid
+        task_uuid = str(uuid.uuid1())
+
+    # 解析 target-headers
+    target_headers = {}
+    if args.target_headers:
+        try:
+            target_headers = json.loads(args.target_headers)
+        except json.JSONDecodeError:
+            print("错误: --target-headers 不是合法的JSON字符串", file=sys.stderr)
+            sys.exit(1)
+
     # 创建Agent
     agent = ApiTestAgent(
         mode=args.mode,
@@ -92,6 +115,10 @@ def main():
         llm_api_url=args.llm_api_url,
         llm_api_key=args.llm_api_key,
         llm_model=args.llm_model,
+        uuid=task_uuid,
+        env=args.env,
+        target_base_url=args.target_base_url,
+        target_headers=target_headers,
     )
 
     if args.generate_only:
