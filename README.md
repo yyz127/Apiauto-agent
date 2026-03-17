@@ -55,13 +55,15 @@ python -m apiauto_agent examples/petstore.yaml \
   --llm-model gpt-4o-mini
 ```
 
-使用真实接口执行：
+使用真实接口A执行：
 
 ```bash
 python -m apiauto_agent examples/petstore.yaml \
   --llm-api-url http://localhost:8000/v1/chat/completions \
   --mode api \
-  --api-url http://localhost:8080/api/testcase
+  --api-url http://localhost:8080/report/generatAutotestReport \
+  --target-base-url http://localhost:8080 \
+  --env dev
 ```
 
 输出 JSON 报告：
@@ -81,7 +83,10 @@ python -m apiauto_agent examples/petstore.yaml \
 | `--llm-api-key` | 大模型 API Key | 空 |
 | `--llm-model` | 大模型名称 | `gpt-4o-mini` |
 | `--mode` | 执行模式：`mock` 或 `api` | `mock` |
-| `--api-url` | 真实接口 URL（`mode=api` 时必填） | 空 |
+| `--api-url` | 接口A的 URL 地址（`mode=api` 时必填） | 空 |
+| `--target-base-url` | 被测接口的基础 URL（`mode=api` 时使用） | 空 |
+| `--uuid` | 测试任务唯一标识（`mode=api` 时使用，不传则自动生成） | 空 |
+| `--env` | 环境标识：`dev`、`uat`、`test`（`mode=api` 时使用） | 空 |
 | `--timeout` | 请求超时时间（秒） | `30` |
 | `--filter` | 过滤接口路径，只测试包含该字符串的接口 | — |
 | `--case-type` | 用例类型：`all`、`normal`、`abnormal` | `all` |
@@ -89,6 +94,30 @@ python -m apiauto_agent examples/petstore.yaml \
 | `--human-review` | 启用人工审核 | — |
 | `--output` / `-o` | 输出 JSON 报告到文件 | — |
 | `--verbose` / `-v` | 详细输出 | — |
+
+## 接口A对接说明
+
+`api` 模式下，Agent 将测试用例逐个发送到接口A（`POST /report/generatAutotestReport`），请求格式如下：
+
+```json
+{
+  "url": "http://target-host/pets",
+  "header": "{\"Content-Type\":\"application/json\"}",
+  "param": ["{\"limit\":10,\"status\":\"available\"}"],
+  "uuid": "550e8400-e29b-41d4-a716-446655440000",
+  "env": "dev"
+}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `url` | string | 被测接口的完整 URL（`--target-base-url` + 接口路径） |
+| `header` | string | 请求头的 JSON 字符串 |
+| `param` | list\<string\> | 请求参数列表，每个元素是一个 JSON 字符串 |
+| `uuid` | string | 测试任务唯一标识 |
+| `env` | string | 环境标识（dev / uat / test） |
+
+接口A是异步执行的，接收请求后立即返回，测试完成后通过回调通知结果。
 
 ## 架构
 
@@ -109,7 +138,7 @@ apiauto_agent/
 ├── parser.py          # OpenAPI/Swagger 解析
 ├── llm_generator.py   # LLM 用例生成
 ├── generator.py       # 生成器接口
-├── executor.py        # 用例执行
+├── executor.py        # 用例执行（Mock / 接口A）
 ├── graph.py           # LangGraph 图定义
 ├── nodes.py           # 图节点实现
 └── state.py           # 图状态定义

@@ -105,12 +105,21 @@ class ApiTestAgent:
         llm_api_url: str = "",
         llm_api_key: str = "",
         llm_model: str = "",
+        uuid: str = "",
+        env: str = "",
+        target_base_url: str = "",
     ):
+        self.uuid = uuid
+        self.env = env
+        self.target_base_url = target_base_url
         self.executor = create_executor(
             mode=mode,
             api_url=api_url,
             timeout=timeout,
             headers=headers,
+            uuid=uuid,
+            env=env,
+            target_base_url=target_base_url,
         )
         if not llm_api_url:
             raise ValueError("需要提供llm_api_url")
@@ -240,6 +249,9 @@ class ApiTestAgent:
             llm_api_url=getattr(self.llm_generator, "api_url", ""),
             llm_api_key=getattr(self.llm_generator, "api_key", ""),
             llm_model=getattr(self.llm_generator, "model", "gpt-4o-mini"),
+            uuid=self.uuid,
+            env=self.env,
+            target_base_url=self.target_base_url,
         )
 
         graph = build_graph()

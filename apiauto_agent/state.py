@@ -27,6 +27,11 @@ class ApiTestState(TypedDict, total=False):
     llm_api_key: str
     llm_model: str
 
+    # ── 接口A 配置（api 模式） ──
+    uuid: str
+    env: str
+    target_base_url: str
+
     # ── 流程状态（节点间传递） ──
     endpoints: list[dict[str, Any]]       # 解析后的 EndpointInfo (dict形式)
     current_index: int                     # 当前处理的接口索引
@@ -55,6 +60,9 @@ def create_initial_state(
     llm_api_url: str = "",
     llm_api_key: str = "",
     llm_model: str = "gpt-4o-mini",
+    uuid: str = "",
+    env: str = "",
+    target_base_url: str = "",
 ) -> ApiTestState:
     """从 CLI 参数构建初始状态。"""
     return ApiTestState(
@@ -69,6 +77,9 @@ def create_initial_state(
         llm_api_url=llm_api_url,
         llm_api_key=llm_api_key,
         llm_model=llm_model,
+        uuid=uuid,
+        env=env,
+        target_base_url=target_base_url,
         endpoints=[],
         current_index=0,
         current_endpoint={},

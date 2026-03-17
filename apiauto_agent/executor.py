@@ -101,28 +101,47 @@ class MockExecutor(BaseExecutor):
 class ApiExecutor(BaseExecutor):
     """真实接口A执行器
 
-    将测试用例发送到接口A创建并执行。
-    需要配置接口A的URL地址。
+    将测试用例发送到接口A（POST /report/generatAutotestReport）执行。
+    请求格式适配 Java 端 ReportGenerateRequest：
+      { url, header(JSON字符串), param(JSON字符串列表), uuid, env }
     """
 
-    def __init__(self, api_url: str, timeout: int = 30, headers: dict[str, str] | None = None):
+    def __init__(
+        self,
+        api_url: str,
+        timeout: int = 30,
+        headers: dict[str, str] | None = None,
+        uuid: str = "",
+        env: str = "",
+        target_base_url: str = "",
+    ):
         self.api_url = api_url.rstrip("/")
         self.timeout = timeout
+        self.uuid = uuid
+        self.env = env
+        self.target_base_url = target_base_url.rstrip("/")
         self.session = requests.Session()
         if headers:
             self.session.headers.update(headers)
 
+    def _build_target_url(self, test_case: TestCase) -> str:
+        """拼接目标接口的完整 URL。"""
+        return f"{self.target_base_url}{test_case.endpoint_path}"
+
     def execute(self, test_case: TestCase) -> ExecutionResult:
         start = time.time()
+
+        # 构建接口A期望的 ReportGenerateRequest 格式
+        target_url = self._build_target_url(test_case)
+        header_json = json.dumps(test_case.headers, ensure_ascii=False) if test_case.headers else "{}"
+        param_json = json.dumps(test_case.parameters, ensure_ascii=False, default=str)
+
         payload = {
-            "test_case_name": test_case.name,
-            "description": test_case.description,
-            "endpoint_path": test_case.endpoint_path,
-            "method": test_case.method,
-            "case_type": test_case.case_type,
-            "parameters": test_case.parameters,
-            "headers": test_case.headers,
-            "expected_status": test_case.expected_status,
+            "url": target_url,
+            "header": header_json,
+            "param": [param_json],
+            "uuid": self.uuid,
+            "env": self.env,
         }
 
         try:
@@ -158,6 +177,9 @@ def create_executor(
     api_url: str = "",
     timeout: int = 30,
     headers: dict[str, str] | None = None,
+    uuid: str = "",
+    env: str = "",
+    target_base_url: str = "",
 ) -> BaseExecutor:
     """工厂方法，根据模式创建对应的执行器。"""
     if mode == "mock":
@@ -165,6 +187,13 @@ def create_executor(
     elif mode == "api":
         if not api_url:
             raise ValueError("真实模式需要提供api_url参数")
-        return ApiExecutor(api_url=api_url, timeout=timeout, headers=headers)
+        return ApiExecutor(
+            api_url=api_url,
+            timeout=timeout,
+            headers=headers,
+            uuid=uuid,
+            env=env,
+            target_base_url=target_base_url,
+        )
     else:
         raise ValueError(f"不支持的模式: {mode}，可选: mock, api")

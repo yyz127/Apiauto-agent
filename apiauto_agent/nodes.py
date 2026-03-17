@@ -133,7 +133,15 @@ def execute_cases(state: ApiTestState) -> dict[str, Any]:
     timeout = state.get("timeout", 30)
     headers = state.get("headers", {})
 
-    executor = create_executor(mode=mode, api_url=api_url, timeout=timeout, headers=headers)
+    executor = create_executor(
+        mode=mode,
+        api_url=api_url,
+        timeout=timeout,
+        headers=headers,
+        uuid=state.get("uuid", ""),
+        env=state.get("env", ""),
+        target_base_url=state.get("target_base_url", ""),
+    )
 
     case_dicts = state.get("current_cases", [])
     cases = [_dict_to_case(d) for d in case_dicts]
