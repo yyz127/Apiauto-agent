@@ -3,15 +3,14 @@
 核心Agent模块，串联YAML解析、用例生成、用例执行的完整流程。
 """
 
-import json
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 from .parser import parse_openapi_file, EndpointInfo
 from .generator import generate_test_cases, generate_normal_cases, generate_abnormal_cases, TestCase
-from .executor import create_executor, BaseExecutor, ExecutionResult
+from .executor import create_executor
+from .llm_generator import LLMCaseGenerator
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +102,10 @@ class ApiTestAgent:
         api_url: str = "",
         timeout: int = 30,
         headers: dict[str, str] | None = None,
+        case_generator: str = "rule",
+        llm_api_url: str = "",
+        llm_api_key: str = "",
+        llm_model: str = "",
     ):
         self.executor = create_executor(
             mode=mode,
@@ -110,6 +113,19 @@ class ApiTestAgent:
             timeout=timeout,
             headers=headers,
         )
+        if case_generator not in {"rule", "llm"}:
+            raise ValueError("case_generator只支持: rule, llm")
+        self.case_generator = case_generator
+        self.llm_generator = None
+        if case_generator == "llm":
+            if not llm_api_url:
+                raise ValueError("使用llm生成模式时需要提供llm_api_url")
+            self.llm_generator = LLMCaseGenerator(
+                api_url=llm_api_url,
+                api_key=llm_api_key,
+                model=llm_model,
+                timeout=timeout,
+            )
 
     def run(
         self,
@@ -154,12 +170,7 @@ class ApiTestAgent:
         logger.info(f"\n处理接口: [{endpoint.method}] {endpoint.path}")
 
         # 生成用例
-        if case_type == "normal":
-            cases = generate_normal_cases(endpoint)
-        elif case_type == "abnormal":
-            cases = generate_abnormal_cases(endpoint)
-        else:
-            cases = generate_test_cases(endpoint)
+        cases = self._generate_cases(endpoint, case_type)
 
         normal_count = sum(1 for c in cases if c.case_type == "normal")
         abnormal_count = sum(1 for c in cases if c.case_type == "abnormal")
@@ -196,11 +207,91 @@ class ApiTestAgent:
 
         all_cases = []
         for endpoint in endpoints:
-            if case_type == "normal":
-                cases = generate_normal_cases(endpoint)
-            elif case_type == "abnormal":
-                cases = generate_abnormal_cases(endpoint)
-            else:
-                cases = generate_test_cases(endpoint)
+            cases = self._generate_cases(endpoint, case_type)
             all_cases.extend(cases)
         return all_cases
+
+    def _generate_cases(self, endpoint: EndpointInfo, case_type: str) -> list[TestCase]:
+        if self.case_generator == "llm" and self.llm_generator is not None:
+            cases = self.llm_generator.generate_cases(endpoint=endpoint, case_type=case_type)
+            if cases:
+                return cases
+            logger.warning("LLM未返回有效用例，降级为规则生成: [%s] %s", endpoint.method, endpoint.path)
+
+        if case_type == "normal":
+            return generate_normal_cases(endpoint)
+        if case_type == "abnormal":
+            return generate_abnormal_cases(endpoint)
+        return generate_test_cases(endpoint)
+
+    # ── LangGraph 模式入口 ──
+
+    def run_graph(
+        self,
+        yaml_file: str | Path,
+        endpoint_filter: str | None = None,
+        case_type: str = "all",
+        human_review: bool = False,
+    ) -> TestReport:
+        """使用 LangGraph StateGraph 执行完整测试流程。
+
+        与 run() 行为等价，但通过 LangGraph 图引擎驱动，
+        具备可观测性、条件路由、未来可扩展 checkpoint 等能力。
+        """
+        from .graph import build_graph
+        from .state import create_initial_state
+
+        initial_state = create_initial_state(
+            yaml_file=str(yaml_file),
+            mode="mock" if isinstance(self.executor, _MockExecutorType) else "api",
+            case_generator=self.case_generator,
+            api_url=getattr(self.executor, "api_url", ""),
+            timeout=getattr(self.executor, "timeout", 30),
+            headers=dict(getattr(self.executor, "session", _FakeSession()).headers or {}),
+            endpoint_filter=endpoint_filter or "",
+            case_type=case_type,
+            human_review=human_review,
+            llm_api_url=getattr(self.llm_generator, "api_url", ""),
+            llm_api_key=getattr(self.llm_generator, "api_key", ""),
+            llm_model=getattr(self.llm_generator, "model", "gpt-4o-mini"),
+        )
+
+        graph = build_graph()
+        final_state = graph.invoke(initial_state)
+
+        # 从 graph 输出的 dict 还原为 TestReport
+        report_dict = final_state.get("report", {})
+        return self._dict_to_report(report_dict)
+
+    @staticmethod
+    def _dict_to_report(d: dict) -> "TestReport":
+        """将 graph 输出的 report dict 还原为 TestReport 对象。"""
+        report = TestReport(
+            yaml_file=d.get("yaml_file", ""),
+            total_endpoints=d.get("total_endpoints", 0),
+            total_cases=d.get("total_cases", 0),
+            total_passed=d.get("total_passed", 0),
+            total_failed=d.get("total_failed", 0),
+        )
+        for ep_dict in d.get("endpoints", []):
+            report.endpoints.append(EndpointReport(
+                path=ep_dict["path"],
+                method=ep_dict["method"],
+                summary=ep_dict.get("summary", ""),
+                total_cases=ep_dict.get("total_cases", 0),
+                normal_cases=ep_dict.get("normal_cases", 0),
+                abnormal_cases=ep_dict.get("abnormal_cases", 0),
+                passed=ep_dict.get("passed", 0),
+                failed=ep_dict.get("failed", 0),
+                results=ep_dict.get("results", []),
+            ))
+        return report
+
+
+class _FakeSession:
+    """用于 getattr 回退的占位对象。"""
+    headers = {}
+
+
+# 用于判断 executor 类型
+from .executor import MockExecutor as _MockExecutorType  # noqa: E402

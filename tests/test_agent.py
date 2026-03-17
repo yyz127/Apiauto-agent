@@ -123,3 +123,18 @@ def test_report_to_dict():
     json_str = json.dumps(d, ensure_ascii=False, default=str)
     assert len(json_str) > 0
     assert d["total_endpoints"] == 5
+
+
+def test_agent_llm_fallback_to_rule(monkeypatch):
+    """测试LLM生成失败时自动降级为规则生成"""
+    agent = ApiTestAgent(
+        mode="mock",
+        case_generator="llm",
+        llm_api_url="http://mock-llm.local/v1/chat/completions",
+    )
+
+    monkeypatch.setattr(agent.llm_generator, "generate_cases", lambda endpoint, case_type: [])
+
+    cases = agent.generate_only(EXAMPLE_YAML, case_type="normal")
+    assert len(cases) > 0
+    assert all(c.case_type == "normal" for c in cases)
