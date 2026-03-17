@@ -12,6 +12,45 @@ from .parser import EndpointInfo
 
 logger = logging.getLogger(__name__)
 
+# ── 系统提示词 ──
+
+SYSTEM_PROMPT = """\
+你是一位资深 API 测试工程师，精通接口测试方法论（等价类划分、边界值分析、错误推测法、安全测试）。
+
+你的任务是根据提供的 API 接口定义，生成高质量、高覆盖率的测试用例。
+
+## 输出格式要求
+必须输出 **纯 JSON 数组**（不要包裹在 markdown 代码块中），数组中每个元素包含：
+- name: 用例名称，格式为 "[正常/异常] {METHOD} {PATH} - 简短描述"
+- description: 用例说明，解释测试意图
+- case_type: "normal" 或 "abnormal"
+- parameters: 请求参数字典（key-value），只包含需要发送的参数
+- expected_status: 期望的 HTTP 状态码（整数）
+
+## 正常用例覆盖策略（case_type="normal"）
+1. **必填参数用例**：只传所有必填参数，使用合理的有效值
+2. **全参数用例**：传所有参数（必填+可选），使用合理的有效值
+3. **枚举遍历**：若参数有 enum 约束，为每个枚举值生成独立用例
+4. **边界值（合法端）**：数值参数取 minimum 和 maximum；字符串参数取 minLength 和 maxLength
+
+## 异常用例覆盖策略（case_type="abnormal"）
+1. **缺少必填参数**：逐一移除每个必填参数，期望 400
+2. **类型错误**：整数参数传字符串、字符串参数传数字等，期望 400
+3. **空值/null**：必填参数传 null 或空字符串，期望 400
+4. **越界值**：数值低于 minimum、高于 maximum；字符串超过 maxLength，期望 400/422
+5. **格式错误**：email 参数传非邮箱、date 参数传非日期等，期望 400/422
+6. **枚举外值**：enum 参数传不在枚举列表中的值，期望 400/422
+7. **安全测试**：XSS 注入 (<script>alert(1)</script>)、SQL 注入 (' OR 1=1 --)，期望 400
+8. **极端值**：超大整数 (2147483648)、超长字符串 (1000+字符)、负数，期望 400
+
+## 注意事项
+- 每个用例的 parameters 必须是可直接发送的参数字典
+- path 参数（如 {petId}）也需要包含在 parameters 中
+- expected_status 应基于 API 定义中的 responses 信息推断
+- 用例名称和描述使用中文
+- 生成的用例应尽量避免重复场景\
+"""
+
 
 class LLMCaseGenerator:
     """调用OpenAI兼容接口生成测试用例。"""
@@ -21,12 +60,14 @@ class LLMCaseGenerator:
         api_url: str,
         api_key: str = "",
         model: str = "",
-        timeout: int = 30,
+        timeout: int = 60,
+        max_retries: int = 2,
     ):
         self.api_url = api_url
         self.api_key = api_key
         self.model = model or "gpt-4o-mini"
         self.timeout = timeout
+        self.max_retries = max_retries
 
     def generate_cases(self, endpoint: EndpointInfo, case_type: str = "all") -> list[TestCase]:
         if case_type not in {"all", "normal", "abnormal"}:
@@ -36,66 +77,100 @@ class LLMCaseGenerator:
         payload = {
             "model": self.model,
             "messages": [
-                {"role": "system", "content": "你是资深API测试工程师。仅返回JSON数组，不要返回markdown代码块。"},
+                {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": prompt},
             ],
-            "temperature": 0.2,
+            "temperature": 0.3,
         }
         headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
 
-        try:
-            resp = requests.post(
-                self.api_url,
-                headers=headers,
-                json=payload,
-                timeout=self.timeout,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-            if not content:
-                logger.warning("LLM返回内容为空")
-                return []
-            raw_cases = self._extract_json(content)
-            return self._to_test_cases(raw_cases, endpoint)
-        except (requests.RequestException, json.JSONDecodeError, ValueError, KeyError, IndexError, TypeError) as e:
-            logger.warning("LLM生成用例失败: %s", e)
-            return []
+        last_error = None
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                resp = requests.post(
+                    self.api_url,
+                    headers=headers,
+                    json=payload,
+                    timeout=self.timeout,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                if not content:
+                    logger.warning("LLM返回内容为空 (第%d次尝试)", attempt)
+                    last_error = "LLM返回内容为空"
+                    continue
+                raw_cases = self._extract_json(content)
+                cases = self._to_test_cases(raw_cases, endpoint)
+                if cases:
+                    logger.info("LLM生成 %d 个用例 (第%d次尝试)", len(cases), attempt)
+                    return cases
+                logger.warning("LLM返回JSON为空数组 (第%d次尝试)", attempt)
+                last_error = "LLM返回空数组"
+            except (requests.RequestException, json.JSONDecodeError, ValueError, KeyError, IndexError, TypeError) as e:
+                logger.warning("LLM生成用例失败 (第%d次尝试): %s", attempt, e)
+                last_error = str(e)
+
+        logger.error("LLM生成用例最终失败，共尝试%d次，最后错误: %s", self.max_retries, last_error)
+        return []
 
     def _build_prompt(self, endpoint: EndpointInfo, case_type: str) -> str:
+        # 构建参数信息，过滤掉 None 值以减少 token 消耗
+        params_desc = []
+        for p in endpoint.parameters:
+            param = {"name": p.name, "location": p.location, "required": p.required, "type": p.param_type}
+            if p.format:
+                param["format"] = p.format
+            if p.enum:
+                param["enum"] = p.enum
+            if p.minimum is not None:
+                param["minimum"] = p.minimum
+            if p.maximum is not None:
+                param["maximum"] = p.maximum
+            if p.min_length is not None:
+                param["minLength"] = p.min_length
+            if p.max_length is not None:
+                param["maxLength"] = p.max_length
+            if p.pattern:
+                param["pattern"] = p.pattern
+            if p.example is not None:
+                param["example"] = p.example
+            if p.default is not None:
+                param["default"] = p.default
+            if p.description:
+                param["description"] = p.description
+            params_desc.append(param)
+
+        # 构建响应状态码信息
+        responses_desc = {}
+        if endpoint.responses:
+            for code, detail in endpoint.responses.items():
+                desc = detail.get("description", "") if isinstance(detail, dict) else str(detail)
+                responses_desc[str(code)] = desc
+
         endpoint_desc = {
             "path": endpoint.path,
             "method": endpoint.method,
             "summary": endpoint.summary,
             "description": endpoint.description,
-            "parameters": [
-                {
-                    "name": p.name,
-                    "location": p.location,
-                    "required": p.required,
-                    "param_type": p.param_type,
-                    "format": p.format,
-                    "enum": p.enum,
-                    "minimum": p.minimum,
-                    "maximum": p.maximum,
-                    "min_length": p.min_length,
-                    "max_length": p.max_length,
-                    "pattern": p.pattern,
-                    "example": p.example,
-                    "default": p.default,
-                }
-                for p in endpoint.parameters
-            ],
+            "parameters": params_desc,
+        }
+        if responses_desc:
+            endpoint_desc["responses"] = responses_desc
+
+        # 构建用户提示词
+        case_type_instruction = {
+            "all": "请同时生成正常用例和异常用例，确保全面覆盖。",
+            "normal": "请只生成正常用例（case_type=\"normal\"），覆盖所有正常使用场景。",
+            "abnormal": "请只生成异常用例（case_type=\"abnormal\"），覆盖各类错误输入场景。",
         }
 
         return (
-            f"请为以下接口生成测试用例，case_type={case_type}。\n"
-            "要求覆盖正常与异常场景（按case_type裁剪），每个用例输出字段："
-            "name, description, case_type(normal/abnormal), parameters(dict), expected_status(int)。\n"
-            "输出必须是JSON数组。\n"
-            f"接口信息: {json.dumps(endpoint_desc, ensure_ascii=False)}"
+            f"请为以下 API 接口生成测试用例。\n\n"
+            f"**生成要求**: {case_type_instruction[case_type]}\n\n"
+            f"**接口定义**:\n```json\n{json.dumps(endpoint_desc, ensure_ascii=False, indent=2)}\n```"
         )
 
     @staticmethod

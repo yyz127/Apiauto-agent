@@ -14,8 +14,7 @@ def build_graph(checkpointer=None):
 
     图拓扑:
         START → parse_yaml → select_endpoint → generate_cases
-              → [check_generation] → review_cases / fallback_rule_gen → review_cases
-              → execute_cases → collect_results
+              → review_cases → execute_cases → collect_results
               → [has_more_endpoints] → select_endpoint / generate_report → END
 
     Args:
@@ -30,7 +29,6 @@ def build_graph(checkpointer=None):
     builder.add_node("parse_yaml", nodes.parse_yaml)
     builder.add_node("select_endpoint", nodes.select_endpoint)
     builder.add_node("generate_cases", nodes.generate_cases)
-    builder.add_node("fallback_rule_gen", nodes.fallback_rule_gen)
     builder.add_node("review_cases", nodes.review_cases)
     builder.add_node("execute_cases", nodes.execute_cases)
     builder.add_node("collect_results", nodes.collect_results)
@@ -40,17 +38,12 @@ def build_graph(checkpointer=None):
     builder.add_edge(START, "parse_yaml")
     builder.add_edge("parse_yaml", "select_endpoint")
     builder.add_edge("select_endpoint", "generate_cases")
-    builder.add_edge("fallback_rule_gen", "review_cases")
+    builder.add_edge("generate_cases", "review_cases")
     builder.add_edge("review_cases", "execute_cases")
     builder.add_edge("execute_cases", "collect_results")
     builder.add_edge("generate_report", END)
 
     # ── 条件边 ──
-    builder.add_conditional_edges(
-        "generate_cases",
-        nodes.check_generation,
-        {"review_cases": "review_cases", "fallback_rule_gen": "fallback_rule_gen"},
-    )
     builder.add_conditional_edges(
         "collect_results",
         nodes.has_more_endpoints,

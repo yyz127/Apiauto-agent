@@ -27,23 +27,23 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
-  # Mock模式运行（默认）
-  python -m apiauto_agent examples/petstore.yaml
+  # Mock模式运行
+  python -m apiauto_agent examples/petstore.yaml --llm-api-url http://localhost:8000/v1/chat/completions
 
   # 只生成用例，不执行
-  python -m apiauto_agent examples/petstore.yaml --generate-only
+  python -m apiauto_agent examples/petstore.yaml --llm-api-url http://localhost:8000/v1/chat/completions --generate-only
 
   # 只生成异常用例
-  python -m apiauto_agent examples/petstore.yaml --case-type abnormal
+  python -m apiauto_agent examples/petstore.yaml --llm-api-url http://localhost:8000/v1/chat/completions --case-type abnormal
 
   # 过滤特定接口
-  python -m apiauto_agent examples/petstore.yaml --filter /pets
+  python -m apiauto_agent examples/petstore.yaml --llm-api-url http://localhost:8000/v1/chat/completions --filter /pets
 
   # 使用真实接口A
-  python -m apiauto_agent examples/petstore.yaml --mode api --api-url http://localhost:8080/api/testcase
+  python -m apiauto_agent examples/petstore.yaml --llm-api-url http://localhost:8000/v1/chat/completions --mode api --api-url http://localhost:8080/api/testcase
 
   # 输出JSON报告
-  python -m apiauto_agent examples/petstore.yaml --output report.json
+  python -m apiauto_agent examples/petstore.yaml --llm-api-url http://localhost:8000/v1/chat/completions --output report.json
         """,
     )
     parser.add_argument("yaml_file", help="OpenAPI/Swagger YAML文件路径")
@@ -63,10 +63,8 @@ def main():
                         help="输出JSON报告到文件")
     parser.add_argument("--verbose", "-v", action="store_true",
                         help="详细输出")
-    parser.add_argument("--case-generator", choices=["rule", "llm"], default="rule",
-                        help="用例生成方式: rule(规则生成，默认) 或 llm(大模型生成)")
-    parser.add_argument("--llm-api-url", default="",
-                        help="大模型API地址（case-generator=llm时必填）")
+    parser.add_argument("--llm-api-url", required=True,
+                        help="大模型API地址（必填，OpenAI兼容接口）")
     parser.add_argument("--llm-api-key", default="",
                         help="大模型API Key（可选）")
     parser.add_argument("--llm-model", default="gpt-4o-mini",
@@ -90,7 +88,6 @@ def main():
         mode=args.mode,
         api_url=args.api_url,
         timeout=args.timeout,
-        case_generator=args.case_generator,
         llm_api_url=args.llm_api_url,
         llm_api_key=args.llm_api_key,
         llm_model=args.llm_model,

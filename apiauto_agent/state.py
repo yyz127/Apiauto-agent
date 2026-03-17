@@ -15,7 +15,6 @@ class ApiTestState(TypedDict, total=False):
     # ── 输入参数（由 CLI 初始化） ──
     yaml_file: str
     mode: Literal["mock", "api"]
-    case_generator: Literal["rule", "llm"]
     api_url: str
     timeout: int
     headers: dict[str, str]
@@ -33,8 +32,7 @@ class ApiTestState(TypedDict, total=False):
     current_index: int                     # 当前处理的接口索引
     current_endpoint: dict[str, Any]       # 当前接口信息
     current_cases: list[dict[str, Any]]    # 当前接口生成的 TestCase (dict形式)
-    generation_method: str                 # "llm" / "rule" / "rule_fallback"
-    generation_failed: bool                # LLM 生成是否失败
+    generation_method: str                 # "llm"
 
     # ── 执行结果 ──
     current_results: list[dict[str, Any]]  # 当前接口的 ExecutionResult (dict形式)
@@ -48,7 +46,6 @@ class ApiTestState(TypedDict, total=False):
 def create_initial_state(
     yaml_file: str,
     mode: str = "mock",
-    case_generator: str = "rule",
     api_url: str = "",
     timeout: int = 30,
     headers: dict[str, str] | None = None,
@@ -63,7 +60,6 @@ def create_initial_state(
     return ApiTestState(
         yaml_file=yaml_file,
         mode=mode,
-        case_generator=case_generator,
         api_url=api_url,
         timeout=timeout,
         headers=headers or {},
@@ -78,7 +74,6 @@ def create_initial_state(
         current_endpoint={},
         current_cases=[],
         generation_method="",
-        generation_failed=False,
         current_results=[],
         endpoint_reports=[],
         report={},
