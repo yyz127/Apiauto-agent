@@ -7,8 +7,18 @@ from unittest.mock import patch
 from apiauto_agent.graph import build_graph, get_graph_mermaid
 from apiauto_agent.state import create_initial_state, ApiTestState
 from apiauto_agent import nodes
+from apiauto_agent.generator import generate_test_cases, generate_normal_cases, generate_abnormal_cases
 
 EXAMPLE_YAML = str(Path(__file__).parent.parent / "examples" / "petstore.yaml")
+
+
+def _mock_llm_generate(endpoint, case_type="all"):
+    """模拟 LLM 生成用例，调用规则引擎以确保测试稳定。"""
+    if case_type == "normal":
+        return generate_normal_cases(endpoint)
+    if case_type == "abnormal":
+        return generate_abnormal_cases(endpoint)
+    return generate_test_cases(endpoint)
 
 
 # ── 图编译测试 ──
@@ -27,17 +37,18 @@ def test_graph_mermaid():
     assert "generate_report" in mermaid
 
 
-# ── 端到端测试（Mock 模式） ──
+# ── 端到端测试（Mock 模式，mock LLM 调用） ──
 
 def test_graph_e2e_mock():
     """LangGraph 图端到端测试：mock 模式，所有用例通过。"""
     initial = create_initial_state(
         yaml_file=EXAMPLE_YAML,
         mode="mock",
-        case_generator="rule",
     )
     graph = build_graph()
-    result = graph.invoke(initial)
+    with patch("apiauto_agent.nodes.LLMCaseGenerator") as MockLLM:
+        MockLLM.return_value.generate_cases.side_effect = _mock_llm_generate
+        result = graph.invoke(initial)
 
     report = result["report"]
     assert report["total_endpoints"] == 5
@@ -55,7 +66,9 @@ def test_graph_e2e_mock_normal_only():
         case_type="normal",
     )
     graph = build_graph()
-    result = graph.invoke(initial)
+    with patch("apiauto_agent.nodes.LLMCaseGenerator") as MockLLM:
+        MockLLM.return_value.generate_cases.side_effect = _mock_llm_generate
+        result = graph.invoke(initial)
 
     report = result["report"]
     for ep in report["endpoints"]:
@@ -71,7 +84,9 @@ def test_graph_e2e_mock_abnormal_only():
         case_type="abnormal",
     )
     graph = build_graph()
-    result = graph.invoke(initial)
+    with patch("apiauto_agent.nodes.LLMCaseGenerator") as MockLLM:
+        MockLLM.return_value.generate_cases.side_effect = _mock_llm_generate
+        result = graph.invoke(initial)
 
     report = result["report"]
     for ep in report["endpoints"]:
@@ -86,7 +101,9 @@ def test_graph_endpoint_filter():
         endpoint_filter="/pets/{petId}",
     )
     graph = build_graph()
-    result = graph.invoke(initial)
+    with patch("apiauto_agent.nodes.LLMCaseGenerator") as MockLLM:
+        MockLLM.return_value.generate_cases.side_effect = _mock_llm_generate
+        result = graph.invoke(initial)
 
     report = result["report"]
     assert report["total_endpoints"] == 3
@@ -96,33 +113,12 @@ def test_graph_report_serializable():
     """测试报告可序列化为 JSON。"""
     initial = create_initial_state(yaml_file=EXAMPLE_YAML, mode="mock")
     graph = build_graph()
-    result = graph.invoke(initial)
+    with patch("apiauto_agent.nodes.LLMCaseGenerator") as MockLLM:
+        MockLLM.return_value.generate_cases.side_effect = _mock_llm_generate
+        result = graph.invoke(initial)
 
     json_str = json.dumps(result["report"], ensure_ascii=False, default=str)
     assert len(json_str) > 0
-
-
-# ── 结果一致性测试 ──
-
-def test_graph_matches_traditional():
-    """LangGraph 模式与传统模式产出一致的统计数据。"""
-    from apiauto_agent.agent import ApiTestAgent
-
-    agent = ApiTestAgent(mode="mock")
-    trad_report = agent.run(EXAMPLE_YAML)
-
-    initial = create_initial_state(yaml_file=EXAMPLE_YAML, mode="mock")
-    graph = build_graph()
-    result = graph.invoke(initial)
-    graph_report = result["report"]
-
-    # 接口数一致
-    assert graph_report["total_endpoints"] == trad_report.total_endpoints
-    # 用例数一致（规则生成是确定性的，但有 random，所以只比较接口维度）
-    assert graph_report["total_endpoints"] == trad_report.total_endpoints
-    # 都是 0 失败
-    assert graph_report["total_failed"] == 0
-    assert trad_report.total_failed == 0
 
 
 # ── 节点单元测试 ──
@@ -160,46 +156,19 @@ def test_node_select_endpoint():
     assert result["current_endpoint"]["path"] is not None
 
 
-def test_node_generate_cases_rule():
-    """测试 generate_cases 节点（规则模式）。"""
+def test_node_generate_cases():
+    """测试 generate_cases 节点（mock LLM）。"""
     state: ApiTestState = create_initial_state(yaml_file=EXAMPLE_YAML)
     parsed = nodes.parse_yaml(state)
     state["endpoints"] = parsed["endpoints"]
     state["current_index"] = 0
     state["current_endpoint"] = parsed["endpoints"][0]
 
-    result = nodes.generate_cases(state)
+    with patch("apiauto_agent.nodes.LLMCaseGenerator") as MockLLM:
+        MockLLM.return_value.generate_cases.side_effect = _mock_llm_generate
+        result = nodes.generate_cases(state)
     assert len(result["current_cases"]) > 0
-    assert result["generation_failed"] is False
-    assert result["generation_method"] == "rule"
-
-
-def test_node_generate_cases_llm_fallback():
-    """测试 generate_cases 节点 LLM 失败时标记降级。"""
-    state: ApiTestState = create_initial_state(
-        yaml_file=EXAMPLE_YAML,
-        case_generator="llm",
-        llm_api_url="http://fake-llm.local/v1/chat/completions",
-    )
-    parsed = nodes.parse_yaml(state)
-    state["endpoints"] = parsed["endpoints"]
-    state["current_endpoint"] = parsed["endpoints"][0]
-
-    result = nodes.generate_cases(state)
-    # LLM 应该失败（无法连接）
-    assert result["generation_failed"] is True
     assert result["generation_method"] == "llm"
-
-
-def test_node_fallback_rule_gen():
-    """测试 fallback_rule_gen 节点。"""
-    state: ApiTestState = create_initial_state(yaml_file=EXAMPLE_YAML)
-    parsed = nodes.parse_yaml(state)
-    state["current_endpoint"] = parsed["endpoints"][0]
-
-    result = nodes.fallback_rule_gen(state)
-    assert len(result["current_cases"]) > 0
-    assert result["generation_method"] == "rule_fallback"
 
 
 def test_node_execute_cases():
@@ -208,7 +177,9 @@ def test_node_execute_cases():
     parsed = nodes.parse_yaml(state)
     state["current_endpoint"] = parsed["endpoints"][0]
 
-    gen_result = nodes.generate_cases(state)
+    with patch("apiauto_agent.nodes.LLMCaseGenerator") as MockLLM:
+        MockLLM.return_value.generate_cases.side_effect = _mock_llm_generate
+        gen_result = nodes.generate_cases(state)
     state["current_cases"] = gen_result["current_cases"]
 
     exec_result = nodes.execute_cases(state)
@@ -223,7 +194,9 @@ def test_node_collect_results():
     state["current_index"] = 0
     state["current_endpoint"] = parsed["endpoints"][0]
 
-    gen_result = nodes.generate_cases(state)
+    with patch("apiauto_agent.nodes.LLMCaseGenerator") as MockLLM:
+        MockLLM.return_value.generate_cases.side_effect = _mock_llm_generate
+        gen_result = nodes.generate_cases(state)
     state["current_cases"] = gen_result["current_cases"]
     state["generation_method"] = gen_result["generation_method"]
 
@@ -237,18 +210,6 @@ def test_node_collect_results():
 
 # ── 条件边测试 ──
 
-def test_check_generation_success():
-    """测试 check_generation 条件边：成功。"""
-    state = {"generation_failed": False}
-    assert nodes.check_generation(state) == "review_cases"
-
-
-def test_check_generation_failed():
-    """测试 check_generation 条件边：失败降级。"""
-    state = {"generation_failed": True}
-    assert nodes.check_generation(state) == "fallback_rule_gen"
-
-
 def test_has_more_endpoints_yes():
     """测试 has_more_endpoints 条件边：还有更多。"""
     state = {"current_index": 0, "endpoints": [{"path": "/a"}, {"path": "/b"}]}
@@ -261,35 +222,18 @@ def test_has_more_endpoints_no():
     assert nodes.has_more_endpoints(state) == "generate_report"
 
 
-# ── LLM 降级端到端测试 ──
-
-def test_graph_llm_fallback_e2e():
-    """LangGraph 图：LLM 失败自动降级到规则生成，最终仍产出完整报告。"""
-    initial = create_initial_state(
-        yaml_file=EXAMPLE_YAML,
-        mode="mock",
-        case_generator="llm",
-        llm_api_url="http://fake-llm-that-will-fail.local/v1/chat/completions",
-    )
-    graph = build_graph()
-    result = graph.invoke(initial)
-
-    report = result["report"]
-    assert report["total_endpoints"] == 5
-    assert report["total_cases"] > 0
-    assert report["total_failed"] == 0
-    # 验证降级生成方法被记录
-    for ep in report["endpoints"]:
-        assert ep.get("generation_method") == "rule_fallback"
-
-
 # ── Agent.run_graph 测试 ──
 
-def test_agent_run_graph():
+def test_agent_run_graph(monkeypatch):
     """测试 ApiTestAgent.run_graph() 方法。"""
     from apiauto_agent.agent import ApiTestAgent
 
-    agent = ApiTestAgent(mode="mock")
+    agent = ApiTestAgent(mode="mock", llm_api_url="http://mock-llm.local/v1/chat/completions")
+    monkeypatch.setattr(
+        "apiauto_agent.nodes.LLMCaseGenerator",
+        lambda **kwargs: type("MockLLM", (), {"generate_cases": staticmethod(_mock_llm_generate)})(),
+    )
+
     report = agent.run_graph(EXAMPLE_YAML)
 
     assert report.total_endpoints == 5
