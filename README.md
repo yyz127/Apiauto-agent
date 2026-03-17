@@ -1,14 +1,14 @@
 # Apiauto-agent
 
-接口测试智能体：输入 OpenAPI/Swagger YAML，通过 LLM 自动生成测试用例并执行。
+接口测试智能体：输入 OpenAPI/Swagger YAML，通过 LLM 自动生成测试用例并执行。基于 LangGraph 图引擎驱动完整测试流程。
 
 ## 功能
 
 - 解析 OpenAPI 3.x / Swagger 2.0
 - LLM 驱动的测试用例自动生成（正常 / 异常）
 - 支持执行模式：`mock`（默认）/ `api`（真实接口）
-- LangGraph 图引擎模式（`--use-graph`，实验性功能）
-- 可选人工审核（`--human-review`，需配合 `--use-graph`）
+- 基于 LangGraph 的图引擎编排，支持可观测性与条件路由
+- 可选人工审核（`--human-review`）
 - JSON 报告输出
 
 ## 安装
@@ -38,12 +38,12 @@ python -m apiauto_agent examples/petstore.yaml \
   --generate-only
 ```
 
-使用 LangGraph 图引擎模式：
+启用人工审核：
 
 ```bash
 python -m apiauto_agent examples/petstore.yaml \
   --llm-api-url http://localhost:8000/v1/chat/completions \
-  --use-graph
+  --human-review
 ```
 
 指定 API Key 和模型：
@@ -86,10 +86,19 @@ python -m apiauto_agent examples/petstore.yaml \
 | `--filter` | 过滤接口路径，只测试包含该字符串的接口 | — |
 | `--case-type` | 用例类型：`all`、`normal`、`abnormal` | `all` |
 | `--generate-only` | 只生成用例，不执行 | — |
-| `--use-graph` | 使用 LangGraph 图引擎运行（实验性功能） | — |
-| `--human-review` | 启用人工审核（需配合 `--use-graph`） | — |
+| `--human-review` | 启用人工审核 | — |
 | `--output` / `-o` | 输出 JSON 报告到文件 | — |
 | `--verbose` / `-v` | 详细输出 | — |
+
+## 架构
+
+基于 LangGraph StateGraph 的流水线：
+
+```
+START → parse_yaml → select_endpoint → generate_cases
+      → review_cases → execute_cases → collect_results
+      → [has_more_endpoints?] → select_endpoint / generate_report → END
+```
 
 ## 项目结构
 
