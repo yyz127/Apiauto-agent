@@ -63,6 +63,14 @@ def main():
                         help="输出JSON报告到文件")
     parser.add_argument("--verbose", "-v", action="store_true",
                         help="详细输出")
+    parser.add_argument("--case-generator", choices=["rule", "llm"], default="rule",
+                        help="用例生成方式: rule(规则生成，默认) 或 llm(大模型生成)")
+    parser.add_argument("--llm-api-url", default="",
+                        help="大模型API地址（case-generator=llm时必填）")
+    parser.add_argument("--llm-api-key", default="",
+                        help="大模型API Key（可选）")
+    parser.add_argument("--llm-model", default="gpt-4o-mini",
+                        help="大模型名称，默认gpt-4o-mini")
 
     args = parser.parse_args()
     setup_logging(args.verbose)
@@ -78,6 +86,10 @@ def main():
         mode=args.mode,
         api_url=args.api_url,
         timeout=args.timeout,
+        case_generator=args.case_generator,
+        llm_api_url=args.llm_api_url,
+        llm_api_key=args.llm_api_key,
+        llm_model=args.llm_model,
     )
 
     if args.generate_only:
