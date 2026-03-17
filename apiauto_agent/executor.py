@@ -135,10 +135,10 @@ class ApiExecutor(BaseExecutor):
 
         # 构建接口A期望的 ReportGenerateRequest 格式
         target_url = self._build_target_url(test_case)
-        # 合并 CLI 传入的 target_headers（如 Cookie/Token）与测试用例自身的 headers
-        merged_headers = dict(self.target_headers)
-        if test_case.headers:
-            merged_headers.update(test_case.headers)
+        # 合并请求头：先放测试用例的 headers，再用 CLI 传入的 target_headers 覆盖
+        # 确保 Cookie/Token 等认证头始终保留（CLI 输入优先级最高）
+        merged_headers = dict(test_case.headers) if test_case.headers else {}
+        merged_headers.update(self.target_headers)
         header_json = json.dumps(merged_headers, ensure_ascii=False)
         param_json = json.dumps(test_case.parameters, ensure_ascii=False, default=str)
 
