@@ -114,12 +114,14 @@ class ApiExecutor(BaseExecutor):
         uuid: str = "",
         env: str = "",
         target_base_url: str = "",
+        target_headers: dict[str, str] | None = None,
     ):
         self.api_url = api_url.rstrip("/")
         self.timeout = timeout
         self.uuid = uuid
         self.env = env
         self.target_base_url = target_base_url.rstrip("/")
+        self.target_headers = target_headers or {}
         self.session = requests.Session()
         if headers:
             self.session.headers.update(headers)
@@ -133,7 +135,11 @@ class ApiExecutor(BaseExecutor):
 
         # 构建接口A期望的 ReportGenerateRequest 格式
         target_url = self._build_target_url(test_case)
-        header_json = json.dumps(test_case.headers, ensure_ascii=False) if test_case.headers else "{}"
+        # 合并 CLI 传入的 target_headers（如 Cookie/Token）与测试用例自身的 headers
+        merged_headers = dict(self.target_headers)
+        if test_case.headers:
+            merged_headers.update(test_case.headers)
+        header_json = json.dumps(merged_headers, ensure_ascii=False)
         param_json = json.dumps(test_case.parameters, ensure_ascii=False, default=str)
 
         payload = {
@@ -180,6 +186,7 @@ def create_executor(
     uuid: str = "",
     env: str = "",
     target_base_url: str = "",
+    target_headers: dict[str, str] | None = None,
 ) -> BaseExecutor:
     """工厂方法，根据模式创建对应的执行器。"""
     if mode == "mock":
@@ -194,6 +201,7 @@ def create_executor(
             uuid=uuid,
             env=env,
             target_base_url=target_base_url,
+            target_headers=target_headers,
         )
     else:
         raise ValueError(f"不支持的模式: {mode}，可选: mock, api")

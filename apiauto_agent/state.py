@@ -31,6 +31,7 @@ class ApiTestState(TypedDict, total=False):
     uuid: str
     env: str
     target_base_url: str
+    target_headers: dict[str, str]
 
     # ── 流程状态（节点间传递） ──
     endpoints: list[dict[str, Any]]       # 解析后的 EndpointInfo (dict形式)
@@ -63,6 +64,7 @@ def create_initial_state(
     uuid: str = "",
     env: str = "",
     target_base_url: str = "",
+    target_headers: dict[str, str] | None = None,
 ) -> ApiTestState:
     """从 CLI 参数构建初始状态。"""
     return ApiTestState(
@@ -80,6 +82,7 @@ def create_initial_state(
         uuid=uuid,
         env=env,
         target_base_url=target_base_url,
+        target_headers=target_headers or {},
         endpoints=[],
         current_index=0,
         current_endpoint={},

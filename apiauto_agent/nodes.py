@@ -37,6 +37,8 @@ def _dict_to_endpoint(d: dict[str, Any]) -> EndpointInfo:
         request_body_schema=d.get("request_body_schema"),
         responses=d.get("responses", {}),
         tags=d.get("tags", []),
+        security=d.get("security", []),
+        security_schemes=d.get("security_schemes", {}),
     )
 
 
@@ -141,6 +143,7 @@ def execute_cases(state: ApiTestState) -> dict[str, Any]:
         uuid=state.get("uuid", ""),
         env=state.get("env", ""),
         target_base_url=state.get("target_base_url", ""),
+        target_headers=state.get("target_headers", {}),
     )
 
     case_dicts = state.get("current_cases", [])

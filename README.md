@@ -55,7 +55,7 @@ python -m apiauto_agent examples/petstore.yaml \
   --llm-model gpt-4o-mini
 ```
 
-使用真实接口A执行：
+使用真实接口A执行（带 Cookie 认证）：
 
 ```bash
 python -m apiauto_agent examples/petstore.yaml \
@@ -63,6 +63,7 @@ python -m apiauto_agent examples/petstore.yaml \
   --mode api \
   --api-url http://localhost:8080/report/generatAutotestReport \
   --target-base-url http://localhost:8080 \
+  --target-headers '{"Cookie":"XingheToken=eyJhbGci...","Content-Type":"application/json"}' \
   --env dev
 ```
 
@@ -85,6 +86,7 @@ python -m apiauto_agent examples/petstore.yaml \
 | `--mode` | 执行模式：`mock` 或 `api` | `mock` |
 | `--api-url` | 接口A的 URL 地址（`mode=api` 时必填） | 空 |
 | `--target-base-url` | 被测接口的基础 URL（`mode=api` 时使用） | 空 |
+| `--target-headers` | 被测接口的请求头（JSON 字符串，如 Cookie/Token），会合并到每个用例的 header 中 | 空 |
 | `--uuid` | 测试任务唯一标识（`mode=api` 时使用，不传则自动生成） | 空 |
 | `--env` | 环境标识：`dev`、`uat`、`test`（`mode=api` 时使用） | 空 |
 | `--timeout` | 请求超时时间（秒） | `30` |
@@ -112,7 +114,7 @@ python -m apiauto_agent examples/petstore.yaml \
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `url` | string | 被测接口的完整 URL（`--target-base-url` + 接口路径） |
-| `header` | string | 请求头的 JSON 字符串 |
+| `header` | string | 请求头的 JSON 字符串（`--target-headers` 与用例 headers 合并） |
 | `param` | list\<string\> | 请求参数列表，每个元素是一个 JSON 字符串 |
 | `uuid` | string | 测试任务唯一标识 |
 | `env` | string | 环境标识（dev / uat / test） |

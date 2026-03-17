@@ -108,10 +108,12 @@ class ApiTestAgent:
         uuid: str = "",
         env: str = "",
         target_base_url: str = "",
+        target_headers: dict[str, str] | None = None,
     ):
         self.uuid = uuid
         self.env = env
         self.target_base_url = target_base_url
+        self.target_headers = target_headers or {}
         self.executor = create_executor(
             mode=mode,
             api_url=api_url,
@@ -120,6 +122,7 @@ class ApiTestAgent:
             uuid=uuid,
             env=env,
             target_base_url=target_base_url,
+            target_headers=target_headers or {},
         )
         if not llm_api_url:
             raise ValueError("需要提供llm_api_url")
@@ -252,6 +255,7 @@ class ApiTestAgent:
             uuid=self.uuid,
             env=self.env,
             target_base_url=self.target_base_url,
+            target_headers=self.target_headers,
         )
 
         graph = build_graph()

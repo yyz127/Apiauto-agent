@@ -40,6 +40,8 @@ class EndpointInfo:
     request_body_schema: dict | None = None
     responses: dict[str, dict] = field(default_factory=dict)
     tags: list[str] = field(default_factory=list)
+    security: list[dict[str, list[str]]] = field(default_factory=list)
+    security_schemes: dict[str, dict] = field(default_factory=dict)
 
 
 def parse_openapi_file(file_path: str | Path) -> list[EndpointInfo]:
@@ -135,12 +137,16 @@ def _parse_openapi3(spec: dict) -> list[EndpointInfo]:
     """解析OpenAPI 3.0规范。"""
     endpoints = []
     paths = spec.get("paths", {})
+    global_security = spec.get("security", [])
+    security_schemes = spec.get("components", {}).get("securitySchemes", {})
 
     for path, path_item in paths.items():
         for method in ("get", "post", "put", "delete", "patch"):
             if method not in path_item:
                 continue
             operation = path_item[method]
+            # 接口级 security 优先，否则使用全局 security
+            op_security = operation.get("security", global_security)
             endpoint = EndpointInfo(
                 path=path,
                 method=method.upper(),
@@ -148,6 +154,8 @@ def _parse_openapi3(spec: dict) -> list[EndpointInfo]:
                 description=operation.get("description", ""),
                 tags=operation.get("tags", []),
                 responses=operation.get("responses", {}),
+                security=op_security,
+                security_schemes=security_schemes,
             )
 
             # 解析parameters (query, header, path, cookie)
@@ -187,12 +195,15 @@ def _parse_swagger2(spec: dict) -> list[EndpointInfo]:
     """解析Swagger 2.0规范。"""
     endpoints = []
     paths = spec.get("paths", {})
+    global_security = spec.get("security", [])
+    security_definitions = spec.get("securityDefinitions", {})
 
     for path, path_item in paths.items():
         for method in ("get", "post", "put", "delete", "patch"):
             if method not in path_item:
                 continue
             operation = path_item[method]
+            op_security = operation.get("security", global_security)
             endpoint = EndpointInfo(
                 path=path,
                 method=method.upper(),
@@ -200,6 +211,8 @@ def _parse_swagger2(spec: dict) -> list[EndpointInfo]:
                 description=operation.get("description", ""),
                 tags=operation.get("tags", []),
                 responses=operation.get("responses", {}),
+                security=op_security,
+                security_schemes=security_definitions,
             )
 
             for param in operation.get("parameters", []) + path_item.get("parameters", []):

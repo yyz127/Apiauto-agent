@@ -80,6 +80,8 @@ def main():
                         help="环境标识: dev, uat, test（mode=api时使用）")
     parser.add_argument("--target-base-url", default="",
                         help="被测接口的基础URL（mode=api时使用，如 http://localhost:8080）")
+    parser.add_argument("--target-headers", default="",
+                        help="被测接口的请求头（JSON字符串），如 '{\"Cookie\":\"XingheToken=xxx\"}'")
 
     args = parser.parse_args()
     setup_logging(args.verbose)
@@ -96,6 +98,15 @@ def main():
         import uuid
         task_uuid = str(uuid.uuid1())
 
+    # 解析 target-headers
+    target_headers = {}
+    if args.target_headers:
+        try:
+            target_headers = json.loads(args.target_headers)
+        except json.JSONDecodeError:
+            print("错误: --target-headers 不是合法的JSON字符串", file=sys.stderr)
+            sys.exit(1)
+
     # 创建Agent
     agent = ApiTestAgent(
         mode=args.mode,
@@ -107,6 +118,7 @@ def main():
         uuid=task_uuid,
         env=args.env,
         target_base_url=args.target_base_url,
+        target_headers=target_headers,
     )
 
     if args.generate_only:
