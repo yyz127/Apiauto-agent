@@ -71,6 +71,10 @@ def main():
                         help="大模型API Key（可选）")
     parser.add_argument("--llm-model", default="gpt-4o-mini",
                         help="大模型名称，默认gpt-4o-mini")
+    parser.add_argument("--use-graph", action="store_true",
+                        help="使用LangGraph图引擎运行（实验性功能）")
+    parser.add_argument("--human-review", action="store_true",
+                        help="启用人工审核（需配合--use-graph使用）")
 
     args = parser.parse_args()
     setup_logging(args.verbose)
@@ -111,8 +115,22 @@ def main():
             with open(args.output, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
             print(f"用例已保存到: {args.output}")
+    elif args.use_graph:
+        # LangGraph 模式
+        report = agent.run_graph(
+            yaml_file=args.yaml_file,
+            endpoint_filter=args.endpoint_filter,
+            case_type=args.case_type,
+            human_review=args.human_review,
+        )
+        print(report.summary())
+
+        if args.output:
+            with open(args.output, "w", encoding="utf-8") as f:
+                json.dump(report.to_dict(), f, ensure_ascii=False, indent=2)
+            print(f"\nJSON报告已保存到: {args.output}")
     else:
-        # 生成并执行
+        # 传统模式
         report = agent.run(
             yaml_file=args.yaml_file,
             endpoint_filter=args.endpoint_filter,

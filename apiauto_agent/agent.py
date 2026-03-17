@@ -223,3 +223,75 @@ class ApiTestAgent:
         if case_type == "abnormal":
             return generate_abnormal_cases(endpoint)
         return generate_test_cases(endpoint)
+
+    # ── LangGraph 模式入口 ──
+
+    def run_graph(
+        self,
+        yaml_file: str | Path,
+        endpoint_filter: str | None = None,
+        case_type: str = "all",
+        human_review: bool = False,
+    ) -> TestReport:
+        """使用 LangGraph StateGraph 执行完整测试流程。
+
+        与 run() 行为等价，但通过 LangGraph 图引擎驱动，
+        具备可观测性、条件路由、未来可扩展 checkpoint 等能力。
+        """
+        from .graph import build_graph
+        from .state import create_initial_state
+
+        initial_state = create_initial_state(
+            yaml_file=str(yaml_file),
+            mode="mock" if isinstance(self.executor, _MockExecutorType) else "api",
+            case_generator=self.case_generator,
+            api_url=getattr(self.executor, "api_url", ""),
+            timeout=getattr(self.executor, "timeout", 30),
+            headers=dict(getattr(self.executor, "session", _FakeSession()).headers or {}),
+            endpoint_filter=endpoint_filter or "",
+            case_type=case_type,
+            human_review=human_review,
+            llm_api_url=getattr(self.llm_generator, "api_url", ""),
+            llm_api_key=getattr(self.llm_generator, "api_key", ""),
+            llm_model=getattr(self.llm_generator, "model", "gpt-4o-mini"),
+        )
+
+        graph = build_graph()
+        final_state = graph.invoke(initial_state)
+
+        # 从 graph 输出的 dict 还原为 TestReport
+        report_dict = final_state.get("report", {})
+        return self._dict_to_report(report_dict)
+
+    @staticmethod
+    def _dict_to_report(d: dict) -> "TestReport":
+        """将 graph 输出的 report dict 还原为 TestReport 对象。"""
+        report = TestReport(
+            yaml_file=d.get("yaml_file", ""),
+            total_endpoints=d.get("total_endpoints", 0),
+            total_cases=d.get("total_cases", 0),
+            total_passed=d.get("total_passed", 0),
+            total_failed=d.get("total_failed", 0),
+        )
+        for ep_dict in d.get("endpoints", []):
+            report.endpoints.append(EndpointReport(
+                path=ep_dict["path"],
+                method=ep_dict["method"],
+                summary=ep_dict.get("summary", ""),
+                total_cases=ep_dict.get("total_cases", 0),
+                normal_cases=ep_dict.get("normal_cases", 0),
+                abnormal_cases=ep_dict.get("abnormal_cases", 0),
+                passed=ep_dict.get("passed", 0),
+                failed=ep_dict.get("failed", 0),
+                results=ep_dict.get("results", []),
+            ))
+        return report
+
+
+class _FakeSession:
+    """用于 getattr 回退的占位对象。"""
+    headers = {}
+
+
+# 用于判断 executor 类型
+from .executor import MockExecutor as _MockExecutorType  # noqa: E402
