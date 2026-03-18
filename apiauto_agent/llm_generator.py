@@ -7,14 +7,11 @@ from typing import Any
 
 import requests
 
+from .exceptions import CaseGenerationError
 from .generator import TestCase
 from .parser import EndpointInfo
 
 logger = logging.getLogger(__name__)
-
-
-class CaseGenerationError(Exception):
-    """LLM 用例生成失败。"""
 
 # ── 系统提示词 ──
 

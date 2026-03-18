@@ -1,7 +1,7 @@
 """生成用例检查逻辑。"""
 
 from .generator import TestCase
-from .llm_generator import CaseGenerationError
+from .exceptions import CaseGenerationError
 from .parser import EndpointInfo
 
 
@@ -10,7 +10,11 @@ def validate_generated_cases(
     cases: list[TestCase],
     requested_case_type: str = "all",
 ) -> list[TestCase]:
-    """校验生成用例是否满足最小执行要求。"""
+    """校验生成用例是否满足最小执行要求。
+
+    注意: endpoint_path 和 method 由 _to_test_cases() 从 endpoint 强制赋值，
+    无需重复校验。
+    """
     if not cases:
         raise CaseGenerationError("LLM未生成任何有效用例")
 
@@ -22,14 +26,6 @@ def validate_generated_cases(
         if requested_case_type != "all" and case.case_type != requested_case_type:
             raise CaseGenerationError(
                 f"第{index}个用例类型与请求不一致: 期望{requested_case_type}, 实际{case.case_type}"
-            )
-        if case.endpoint_path != endpoint.path:
-            raise CaseGenerationError(
-                f"第{index}个用例endpoint_path不匹配: 期望{endpoint.path}, 实际{case.endpoint_path}"
-            )
-        if case.method != endpoint.method:
-            raise CaseGenerationError(
-                f"第{index}个用例method不匹配: 期望{endpoint.method}, 实际{case.method}"
             )
         if not isinstance(case.parameters, dict):
             raise CaseGenerationError(f"第{index}个用例parameters必须是对象")

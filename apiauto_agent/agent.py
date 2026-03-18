@@ -9,7 +9,6 @@ from pathlib import Path
 
 from .parser import parse_openapi_file
 from .generator import TestCase
-from .executor import create_executor
 from .llm_generator import LLMCaseGenerator
 from .endpoint_workflow import generate_validated_cases
 
@@ -121,22 +120,23 @@ class ApiTestAgent:
         target_base_url: str = "",
         target_headers: dict[str, str] | None = None,
     ):
-        self.uuid = uuid
-        self.env = env
-        self.target_base_url = target_base_url
-        self.target_headers = target_headers or {}
-        self.executor = create_executor(
-            mode=mode,
-            api_url=api_url,
-            timeout=timeout,
-            headers=headers,
-            uuid=uuid,
-            env=env,
-            target_base_url=target_base_url,
-            target_headers=target_headers or {},
-        )
         if not llm_api_url:
             raise ValueError("需要提供llm_api_url")
+
+        # 保留原始配置，供 run_graph / generate_only 使用
+        self._mode = mode
+        self._api_url = api_url
+        self._timeout = timeout
+        self._headers = headers or {}
+        self._llm_api_url = llm_api_url
+        self._llm_api_key = llm_api_key
+        self._llm_model = llm_model
+        self._uuid = uuid
+        self._env = env
+        self._target_base_url = target_base_url
+        self._target_headers = target_headers or {}
+
+        # generate_only 直接使用的实例
         self.llm_generator = LLMCaseGenerator(
             api_url=llm_api_url,
             api_key=llm_api_key,
@@ -179,26 +179,25 @@ class ApiTestAgent:
 
         initial_state = create_initial_state(
             yaml_file=str(yaml_file),
-            mode="mock" if isinstance(self.executor, _MockExecutorType) else "api",
-            api_url=getattr(self.executor, "api_url", ""),
-            timeout=getattr(self.executor, "timeout", 30),
-            headers=dict(getattr(self.executor, "session", _FakeSession()).headers or {}),
+            mode=self._mode,
+            api_url=self._api_url,
+            timeout=self._timeout,
+            headers=self._headers,
             endpoint_filter=endpoint_filter or "",
             case_type=case_type,
             human_review=human_review,
-            llm_api_url=getattr(self.llm_generator, "api_url", ""),
-            llm_api_key=getattr(self.llm_generator, "api_key", ""),
-            llm_model=getattr(self.llm_generator, "model", "gpt-4o-mini"),
-            uuid=self.uuid,
-            env=self.env,
-            target_base_url=self.target_base_url,
-            target_headers=self.target_headers,
+            llm_api_url=self._llm_api_url,
+            llm_api_key=self._llm_api_key,
+            llm_model=self._llm_model,
+            uuid=self._uuid,
+            env=self._env,
+            target_base_url=self._target_base_url,
+            target_headers=self._target_headers,
         )
 
         graph = build_graph()
         final_state = graph.invoke(initial_state)
 
-        # 从 graph 输出的 dict 还原为 TestReport
         report_dict = final_state.get("report", {})
         return self._dict_to_report(report_dict)
 
@@ -228,12 +227,3 @@ class ApiTestAgent:
                 results=ep_dict.get("results", []),
             ))
         return report
-
-
-class _FakeSession:
-    """用于 getattr 回退的占位对象。"""
-    headers = {}
-
-
-# 用于判断 executor 类型
-from .executor import MockExecutor as _MockExecutorType  # noqa: E402
