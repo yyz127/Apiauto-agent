@@ -11,7 +11,8 @@ from typing import Any, Literal
 from .state import ApiTestState
 from .parser import parse_openapi_file, EndpointInfo, ParameterInfo
 from .generator import TestCase
-from .llm_generator import LLMCaseGenerator, CaseGenerationError
+from .exceptions import CaseGenerationError
+from .llm_generator import LLMCaseGenerator
 from .executor import create_executor
 from .endpoint_workflow import (
     generate_validated_cases,
@@ -135,19 +136,43 @@ def generate_cases(state: ApiTestState) -> dict[str, Any]:
         "review_status": "pending",
     }
 def review_cases(state: ApiTestState) -> dict[str, Any]:
-    """节点：人工审核路由，具体审核逻辑下沉到 endpoint_workflow。"""
+    """节点：人工审核路由，具体审核逻辑下沉到 endpoint_workflow。
+
+    将 ReviewDecision 领域对象翻译为图状态更新，保持 endpoint_workflow 与状态解耦。
+    """
     n = len(state.get("current_cases", []))
     ep = state.get("current_endpoint", {})
     logger.info("用例审核: [%s] %s 共 %d 个用例", ep.get("method"), ep.get("path"), n)
     endpoint = _dict_to_endpoint(state["current_endpoint"])
     cases = [_dict_to_case(d) for d in state.get("current_cases", [])]
-    return review_generated_cases(
+    decision = review_generated_cases(
         endpoint,
         cases,
         human_review=state.get("human_review", False),
         review_round=state.get("review_round", 0),
         max_review_rounds=state.get("max_review_rounds", 3),
     )
+
+    # 翻译 ReviewDecision → 图状态更新
+    if decision.status == "approved":
+        return {"review_status": "approved", "review_feedback": ""}
+
+    if decision.status == "regenerate":
+        return {
+            "review_status": "regenerate",
+            "review_feedback": decision.feedback,
+            "review_round": decision.round,
+        }
+
+    # rejected
+    return {
+        "review_status": "rejected",
+        "review_feedback": "",
+        "current_cases": [],
+        "current_results": [],
+        "generation_failed": True,
+        "generation_error": decision.rejection_reason,
+    }
 
 
 def execute_cases(state: ApiTestState) -> dict[str, Any]:
@@ -212,6 +237,13 @@ def collect_results(state: ApiTestState) -> dict[str, Any]:
     return {
         "endpoint_reports": existing_reports,
         "current_index": state["current_index"] + 1,
+        # 重置所有 per-endpoint 状态，避免跨迭代的状态泄漏
+        "current_endpoint": {},
+        "current_cases": [],
+        "current_results": [],
+        "generation_method": "",
+        "generation_failed": False,
+        "generation_error": "",
         "review_feedback": "",
         "review_status": "pending",
         "review_round": 0,
@@ -242,6 +274,13 @@ def generate_report(state: ApiTestState) -> dict[str, Any]:
 
 
 # ── 条件边函数 ──
+
+def has_endpoints(state: ApiTestState) -> Literal["select_endpoint", "generate_report"]:
+    """条件边：解析后判断是否有接口需要处理（防止空列表 IndexError）。"""
+    if state.get("endpoints"):
+        return "select_endpoint"
+    return "generate_report"
+
 
 def has_more_endpoints(state: ApiTestState) -> Literal["select_endpoint", "generate_report"]:
     """条件边：判断是否还有更多接口需要处理。"""

@@ -13,7 +13,7 @@ def build_graph(checkpointer=None):
     """构建并编译 API 测试 Agent 的 LangGraph StateGraph。
 
     图拓扑:
-        START → parse_yaml → select_endpoint → generate_cases
+        START → parse_yaml → [有接口?] → select_endpoint → generate_cases
               → [生成成功?] → review_cases
               → [人工审核通过] → execute_cases → collect_results
               → [人工审核反馈] → generate_cases
@@ -39,12 +39,16 @@ def build_graph(checkpointer=None):
 
     # ── 普通边 ──
     builder.add_edge(START, "parse_yaml")
-    builder.add_edge("parse_yaml", "select_endpoint")
     builder.add_edge("select_endpoint", "generate_cases")
     builder.add_edge("execute_cases", "collect_results")
     builder.add_edge("generate_report", END)
 
     # ── 条件边 ──
+    builder.add_conditional_edges(
+        "parse_yaml",
+        nodes.has_endpoints,
+        {"select_endpoint": "select_endpoint", "generate_report": "generate_report"},
+    )
     builder.add_conditional_edges(
         "generate_cases",
         nodes.should_execute_current_endpoint,

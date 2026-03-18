@@ -4,12 +4,23 @@
 """
 
 from collections.abc import Callable
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Literal
 
 from .case_checks import validate_generated_cases
 from .generator import TestCase
-from .llm_generator import LLMCaseGenerator, CaseGenerationError
+from .exceptions import CaseGenerationError
+from .llm_generator import LLMCaseGenerator
 from .parser import EndpointInfo
+
+
+@dataclass
+class ReviewDecision:
+    """人工审核结果（与图状态解耦的领域对象）。"""
+    status: Literal["approved", "regenerate", "rejected"]
+    feedback: str = ""
+    round: int = 0
+    rejection_reason: str = ""
 
 
 def generate_validated_cases(
@@ -34,12 +45,17 @@ def review_generated_cases(
     human_review: bool = False,
     review_round: int = 0,
     max_review_rounds: int = 3,
-    input_func: Callable[[str], str] = input,
-    output_func: Callable[..., Any] = print,
-) -> dict[str, Any]:
+    input_func: Callable[[str], str] | None = None,
+    output_func: Callable[..., Any] | None = None,
+) -> ReviewDecision:
     """人工审核生成用例，返回审核决策。"""
+    if input_func is None:
+        input_func = input
+    if output_func is None:
+        output_func = print
+
     if not human_review:
-        return {"review_status": "approved", "review_feedback": ""}
+        return ReviewDecision(status="approved")
 
     output_func()
     output_func("=" * 60)
@@ -55,14 +71,11 @@ def review_generated_cases(
         output_func()
 
     if review_round >= max_review_rounds:
-        reason = f"人工审核反馈已达到最大轮次{max_review_rounds}，仍未通过"
-        return {
-            "current_cases": [],
-            "current_results": [],
-            "generation_failed": True,
-            "generation_error": reason,
-            "review_status": "rejected",
-        }
+        return ReviewDecision(
+            status="rejected",
+            round=review_round,
+            rejection_reason=f"人工审核反馈已达到最大轮次{max_review_rounds}，仍未通过",
+        )
 
     while True:
         decision = input_func("审核结果 [a=通过, f=反馈修改, r=拒绝]: ").strip().lower()
@@ -71,18 +84,13 @@ def review_generated_cases(
         output_func("输入无效，请输入 a、f 或 r。")
 
     if decision == "a":
-        return {"review_status": "approved", "review_feedback": ""}
+        return ReviewDecision(status="approved")
 
     if decision == "r":
-        reason = "人工审核拒绝执行当前接口用例"
-        return {
-            "current_cases": [],
-            "current_results": [],
-            "generation_failed": True,
-            "generation_error": reason,
-            "review_status": "rejected",
-            "review_feedback": "",
-        }
+        return ReviewDecision(
+            status="rejected",
+            rejection_reason="人工审核拒绝执行当前接口用例",
+        )
 
     while True:
         feedback = input_func("请输入需要反馈给 LLM 的问题: ").strip()
@@ -90,11 +98,11 @@ def review_generated_cases(
             break
         output_func("反馈不能为空。")
 
-    return {
-        "review_feedback": feedback,
-        "review_status": "regenerate",
-        "review_round": review_round + 1,
-    }
+    return ReviewDecision(
+        status="regenerate",
+        feedback=feedback,
+        round=review_round + 1,
+    )
 
 
 def summarize_case_counts(cases: list[TestCase]) -> tuple[int, int]:
