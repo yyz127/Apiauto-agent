@@ -7,10 +7,11 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .parser import parse_openapi_file, EndpointInfo
+from .parser import parse_openapi_file
 from .generator import TestCase
 from .executor import create_executor
 from .llm_generator import LLMCaseGenerator
+from .endpoint_workflow import generate_validated_cases
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +22,8 @@ class EndpointReport:
     path: str
     method: str
     summary: str
+    generation_failed: bool = False
+    generation_error: str = ""
     total_cases: int = 0
     normal_cases: int = 0
     abnormal_cases: int = 0
@@ -34,6 +37,7 @@ class TestReport:
     """完整测试报告"""
     yaml_file: str
     total_endpoints: int = 0
+    generation_failed_endpoints: int = 0
     total_cases: int = 0
     total_passed: int = 0
     total_failed: int = 0
@@ -43,6 +47,7 @@ class TestReport:
         return {
             "yaml_file": self.yaml_file,
             "total_endpoints": self.total_endpoints,
+            "generation_failed_endpoints": self.generation_failed_endpoints,
             "total_cases": self.total_cases,
             "total_passed": self.total_passed,
             "total_failed": self.total_failed,
@@ -52,6 +57,8 @@ class TestReport:
                     "path": ep.path,
                     "method": ep.method,
                     "summary": ep.summary,
+                    "generation_failed": ep.generation_failed,
+                    "generation_error": ep.generation_error,
                     "total_cases": ep.total_cases,
                     "normal_cases": ep.normal_cases,
                     "abnormal_cases": ep.abnormal_cases,
@@ -69,6 +76,7 @@ class TestReport:
             f"测试报告: {self.yaml_file}",
             "=" * 60,
             f"接口数量: {self.total_endpoints}",
+            f"生成失败接口: {self.generation_failed_endpoints}",
             f"用例总数: {self.total_cases}",
             f"通过: {self.total_passed}  失败: {self.total_failed}",
             f"通过率: {self.total_passed / self.total_cases * 100:.1f}%" if self.total_cases else "无用例",
@@ -76,6 +84,9 @@ class TestReport:
         ]
         for ep in self.endpoints:
             lines.append(f"\n[{ep.method}] {ep.path} - {ep.summary}")
+            if ep.generation_failed:
+                lines.append(f"  生成失败: {ep.generation_error}")
+                continue
             lines.append(f"  正常用例: {ep.normal_cases}, 异常用例: {ep.abnormal_cases}")
             lines.append(f"  通过: {ep.passed}, 失败: {ep.failed}")
             for r in ep.results:
@@ -92,7 +103,7 @@ class ApiTestAgent:
 
     使用方法:
         agent = ApiTestAgent(mode="mock")
-        report = agent.run("path/to/openapi.yaml")
+        report = agent.run_graph("path/to/openapi.yaml")
         print(report.summary())
     """
 
@@ -133,73 +144,6 @@ class ApiTestAgent:
             timeout=timeout,
         )
 
-    def run(
-        self,
-        yaml_file: str | Path,
-        endpoint_filter: str | None = None,
-        case_type: str = "all",
-    ) -> TestReport:
-        """执行完整流程: 解析YAML -> 生成用例 -> 执行用例 -> 返回报告。
-
-        Args:
-            yaml_file: OpenAPI YAML文件路径
-            endpoint_filter: 可选，只测试包含该字符串的路径
-            case_type: "all", "normal", "abnormal"
-        """
-        yaml_file = str(yaml_file)
-        report = TestReport(yaml_file=yaml_file)
-
-        # 1. 解析YAML
-        logger.info(f"解析YAML文件: {yaml_file}")
-        endpoints = parse_openapi_file(yaml_file)
-        logger.info(f"发现 {len(endpoints)} 个接口")
-
-        # 2. 过滤接口
-        if endpoint_filter:
-            endpoints = [ep for ep in endpoints if endpoint_filter in ep.path]
-            logger.info(f"过滤后剩余 {len(endpoints)} 个接口")
-
-        report.total_endpoints = len(endpoints)
-
-        # 3. 为每个接口生成和执行用例
-        for endpoint in endpoints:
-            ep_report = self._process_endpoint(endpoint, case_type)
-            report.endpoints.append(ep_report)
-            report.total_cases += ep_report.total_cases
-            report.total_passed += ep_report.passed
-            report.total_failed += ep_report.failed
-
-        return report
-
-    def _process_endpoint(self, endpoint: EndpointInfo, case_type: str) -> EndpointReport:
-        """处理单个接口：生成用例并执行。"""
-        logger.info(f"\n处理接口: [{endpoint.method}] {endpoint.path}")
-
-        # 生成用例
-        cases = self._generate_cases(endpoint, case_type)
-
-        normal_count = sum(1 for c in cases if c.case_type == "normal")
-        abnormal_count = sum(1 for c in cases if c.case_type == "abnormal")
-        logger.info(f"生成用例: {len(cases)} 个 (正常: {normal_count}, 异常: {abnormal_count})")
-
-        # 执行用例
-        results = self.executor.execute_batch(cases)
-
-        # 统计结果
-        ep_report = EndpointReport(
-            path=endpoint.path,
-            method=endpoint.method,
-            summary=endpoint.summary,
-            total_cases=len(cases),
-            normal_cases=normal_count,
-            abnormal_cases=abnormal_count,
-            passed=sum(1 for r in results if r.success),
-            failed=sum(1 for r in results if not r.success),
-            results=[r.to_dict() for r in results],
-        )
-
-        return ep_report
-
     def generate_only(
         self,
         yaml_file: str | Path,
@@ -213,15 +157,8 @@ class ApiTestAgent:
 
         all_cases = []
         for endpoint in endpoints:
-            cases = self._generate_cases(endpoint, case_type)
-            all_cases.extend(cases)
+            all_cases.extend(generate_validated_cases(endpoint, self.llm_generator, case_type=case_type))
         return all_cases
-
-    def _generate_cases(self, endpoint: EndpointInfo, case_type: str) -> list[TestCase]:
-        cases = self.llm_generator.generate_cases(endpoint=endpoint, case_type=case_type)
-        if not cases:
-            logger.warning("LLM未返回有效用例: [%s] %s", endpoint.method, endpoint.path)
-        return cases
 
     # ── LangGraph 模式入口 ──
 
@@ -234,8 +171,8 @@ class ApiTestAgent:
     ) -> TestReport:
         """使用 LangGraph StateGraph 执行完整测试流程。
 
-        与 run() 行为等价，但通过 LangGraph 图引擎驱动，
-        具备可观测性、条件路由、未来可扩展 checkpoint 等能力。
+        当前项目的唯一完整执行入口，通过 LangGraph 图引擎驱动，
+        支持条件路由和人工审核回环。
         """
         from .graph import build_graph
         from .state import create_initial_state
@@ -271,6 +208,7 @@ class ApiTestAgent:
         report = TestReport(
             yaml_file=d.get("yaml_file", ""),
             total_endpoints=d.get("total_endpoints", 0),
+            generation_failed_endpoints=d.get("generation_failed_endpoints", 0),
             total_cases=d.get("total_cases", 0),
             total_passed=d.get("total_passed", 0),
             total_failed=d.get("total_failed", 0),
@@ -280,6 +218,8 @@ class ApiTestAgent:
                 path=ep_dict["path"],
                 method=ep_dict["method"],
                 summary=ep_dict.get("summary", ""),
+                generation_failed=ep_dict.get("generation_failed", False),
+                generation_error=ep_dict.get("generation_error", ""),
                 total_cases=ep_dict.get("total_cases", 0),
                 normal_cases=ep_dict.get("normal_cases", 0),
                 abnormal_cases=ep_dict.get("abnormal_cases", 0),

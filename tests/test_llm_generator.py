@@ -1,6 +1,6 @@
 """测试LLM用例生成能力"""
 
-from apiauto_agent.llm_generator import LLMCaseGenerator, SYSTEM_PROMPT
+from apiauto_agent.llm_generator import LLMCaseGenerator, SYSTEM_PROMPT, CaseGenerationError
 from apiauto_agent.parser import EndpointInfo, ParameterInfo
 import requests
 
@@ -54,8 +54,11 @@ def test_llm_generator_failed_returns_empty(monkeypatch):
     monkeypatch.setattr("apiauto_agent.llm_generator.requests.post", _fake_post)
 
     g = LLMCaseGenerator(api_url="http://mock-llm.local/v1/chat/completions", max_retries=1)
-    cases = g.generate_cases(_fake_endpoint(), case_type="normal")
-    assert cases == []
+    try:
+        g.generate_cases(_fake_endpoint(), case_type="normal")
+        assert False, "expected CaseGenerationError"
+    except CaseGenerationError as e:
+        assert "network error" in str(e)
 
 
 def test_llm_generator_supports_markdown_json(monkeypatch):

@@ -39,6 +39,12 @@ class ApiTestState(TypedDict, total=False):
     current_endpoint: dict[str, Any]       # 当前接口信息
     current_cases: list[dict[str, Any]]    # 当前接口生成的 TestCase (dict形式)
     generation_method: str                 # "llm"
+    generation_failed: bool                # 当前接口是否生成失败
+    generation_error: str                  # 当前接口生成失败原因
+    review_feedback: str                   # 人工审核反馈，供 LLM 重新生成
+    review_status: str                     # "pending" / "approved" / "regenerate" / "rejected"
+    review_round: int                      # 当前接口人工审核轮次
+    max_review_rounds: int                 # 人工审核最大回环次数
 
     # ── 执行结果 ──
     current_results: list[dict[str, Any]]  # 当前接口的 ExecutionResult (dict形式)
@@ -65,6 +71,7 @@ def create_initial_state(
     env: str = "",
     target_base_url: str = "",
     target_headers: dict[str, str] | None = None,
+    max_review_rounds: int = 3,
 ) -> ApiTestState:
     """从 CLI 参数构建初始状态。"""
     return ApiTestState(
@@ -88,6 +95,12 @@ def create_initial_state(
         current_endpoint={},
         current_cases=[],
         generation_method="",
+        generation_failed=False,
+        generation_error="",
+        review_feedback="",
+        review_status="pending",
+        review_round=0,
+        max_review_rounds=max_review_rounds,
         current_results=[],
         endpoint_reports=[],
         report={},
