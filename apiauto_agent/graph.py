@@ -14,7 +14,10 @@ def build_graph(checkpointer=None):
 
     图拓扑:
         START → parse_yaml → select_endpoint → generate_cases
-              → review_cases → execute_cases → collect_results
+              → [生成成功?] → review_cases
+              → [人工审核通过] → execute_cases → collect_results
+              → [人工审核反馈] → generate_cases
+              → [生成失败/审核拒绝] → collect_results
               → [has_more_endpoints] → select_endpoint / generate_report → END
 
     Args:
@@ -38,12 +41,24 @@ def build_graph(checkpointer=None):
     builder.add_edge(START, "parse_yaml")
     builder.add_edge("parse_yaml", "select_endpoint")
     builder.add_edge("select_endpoint", "generate_cases")
-    builder.add_edge("generate_cases", "review_cases")
-    builder.add_edge("review_cases", "execute_cases")
     builder.add_edge("execute_cases", "collect_results")
     builder.add_edge("generate_report", END)
 
     # ── 条件边 ──
+    builder.add_conditional_edges(
+        "generate_cases",
+        nodes.should_execute_current_endpoint,
+        {"review_cases": "review_cases", "collect_results": "collect_results"},
+    )
+    builder.add_conditional_edges(
+        "review_cases",
+        nodes.route_after_review,
+        {
+            "execute_cases": "execute_cases",
+            "generate_cases": "generate_cases",
+            "collect_results": "collect_results",
+        },
+    )
     builder.add_conditional_edges(
         "collect_results",
         nodes.has_more_endpoints,

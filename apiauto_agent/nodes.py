@@ -11,8 +11,13 @@ from typing import Any, Literal
 from .state import ApiTestState
 from .parser import parse_openapi_file, EndpointInfo, ParameterInfo
 from .generator import TestCase
-from .llm_generator import LLMCaseGenerator
+from .llm_generator import LLMCaseGenerator, CaseGenerationError
 from .executor import create_executor
+from .endpoint_workflow import (
+    generate_validated_cases,
+    review_generated_cases,
+    summarize_case_counts,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +103,7 @@ def generate_cases(state: ApiTestState) -> dict[str, Any]:
     """节点：使用 LLM 生成测试用例。"""
     endpoint = _dict_to_endpoint(state["current_endpoint"])
     case_type = state.get("case_type", "all")
+    review_feedback = state.get("review_feedback", "")
 
     llm_gen = LLMCaseGenerator(
         api_url=state["llm_api_url"],
@@ -105,27 +111,43 @@ def generate_cases(state: ApiTestState) -> dict[str, Any]:
         model=state.get("llm_model", "gpt-4o-mini"),
         timeout=state.get("timeout", 60),
     )
-    cases = llm_gen.generate_cases(endpoint, case_type)
-    if cases:
+    try:
+        cases = generate_validated_cases(
+            endpoint,
+            llm_gen,
+            case_type=case_type,
+            review_feedback=review_feedback,
+        )
         logger.info("LLM 生成 %d 个用例", len(cases))
-    else:
-        logger.warning("LLM 未返回有效用例: [%s] %s", endpoint.method, endpoint.path)
+        generation_failed = False
+        generation_error = ""
+    except CaseGenerationError as e:
+        cases = []
+        generation_failed = True
+        generation_error = str(e)
+        logger.error("LLM 未返回有效用例: [%s] %s, 原因: %s", endpoint.method, endpoint.path, generation_error)
     return {
         "current_cases": [_case_to_dict(c) for c in cases],
+        "current_results": [],
         "generation_method": "llm",
+        "generation_failed": generation_failed,
+        "generation_error": generation_error,
+        "review_status": "pending",
     }
-
-
 def review_cases(state: ApiTestState) -> dict[str, Any]:
-    """节点：用例审核（human_review=True 时可扩展为 interrupt）。
-
-    当前版本直接通过，不阻塞。
-    未来可接入 LangGraph interrupt 机制实现人工审核。
-    """
+    """节点：人工审核路由，具体审核逻辑下沉到 endpoint_workflow。"""
     n = len(state.get("current_cases", []))
     ep = state.get("current_endpoint", {})
     logger.info("用例审核: [%s] %s 共 %d 个用例", ep.get("method"), ep.get("path"), n)
-    return {}
+    endpoint = _dict_to_endpoint(state["current_endpoint"])
+    cases = [_dict_to_case(d) for d in state.get("current_cases", [])]
+    return review_generated_cases(
+        endpoint,
+        cases,
+        human_review=state.get("human_review", False),
+        review_round=state.get("review_round", 0),
+        max_review_rounds=state.get("max_review_rounds", 3),
+    )
 
 
 def execute_cases(state: ApiTestState) -> dict[str, Any]:
@@ -160,9 +182,11 @@ def collect_results(state: ApiTestState) -> dict[str, Any]:
     ep = state["current_endpoint"]
     cases = state.get("current_cases", [])
     results = state.get("current_results", [])
+    generation_failed = state.get("generation_failed", False)
+    generation_error = state.get("generation_error", "")
 
-    normal_count = sum(1 for c in cases if c.get("case_type") == "normal")
-    abnormal_count = sum(1 for c in cases if c.get("case_type") == "abnormal")
+    case_objects = [_dict_to_case(d) for d in cases]
+    normal_count, abnormal_count = summarize_case_counts(case_objects)
     passed = sum(1 for r in results if r.get("success"))
     failed = sum(1 for r in results if not r.get("success"))
 
@@ -170,6 +194,8 @@ def collect_results(state: ApiTestState) -> dict[str, Any]:
         "path": ep["path"],
         "method": ep["method"],
         "summary": ep.get("summary", ""),
+        "generation_failed": generation_failed,
+        "generation_error": generation_error,
         "total_cases": len(cases),
         "normal_cases": normal_count,
         "abnormal_cases": abnormal_count,
@@ -177,6 +203,7 @@ def collect_results(state: ApiTestState) -> dict[str, Any]:
         "failed": failed,
         "results": results,
         "generation_method": state.get("generation_method", ""),
+        "review_round": state.get("review_round", 0),
     }
 
     existing_reports = list(state.get("endpoint_reports", []))
@@ -185,12 +212,16 @@ def collect_results(state: ApiTestState) -> dict[str, Any]:
     return {
         "endpoint_reports": existing_reports,
         "current_index": state["current_index"] + 1,
+        "review_feedback": "",
+        "review_status": "pending",
+        "review_round": 0,
     }
 
 
 def generate_report(state: ApiTestState) -> dict[str, Any]:
     """节点：汇总所有 EndpointReport 为最终 TestReport。"""
     reports = state.get("endpoint_reports", [])
+    generation_failed_endpoints = sum(1 for r in reports if r.get("generation_failed"))
     total_cases = sum(r["total_cases"] for r in reports)
     total_passed = sum(r["passed"] for r in reports)
     total_failed = sum(r["failed"] for r in reports)
@@ -198,6 +229,7 @@ def generate_report(state: ApiTestState) -> dict[str, Any]:
     report = {
         "yaml_file": state["yaml_file"],
         "total_endpoints": len(reports),
+        "generation_failed_endpoints": generation_failed_endpoints,
         "total_cases": total_cases,
         "total_passed": total_passed,
         "total_failed": total_failed,
@@ -216,3 +248,22 @@ def has_more_endpoints(state: ApiTestState) -> Literal["select_endpoint", "gener
     if state["current_index"] < len(state["endpoints"]):
         return "select_endpoint"
     return "generate_report"
+
+
+def should_execute_current_endpoint(state: ApiTestState) -> Literal["review_cases", "collect_results"]:
+    """条件边：当前接口生成失败时直接汇总，不进入执行阶段。"""
+    if state.get("generation_failed", False):
+        return "collect_results"
+    return "review_cases"
+
+
+def route_after_review(state: ApiTestState) -> Literal["execute_cases", "generate_cases", "collect_results"]:
+    """条件边：人工审核后决定执行、回生或结束。"""
+    if state.get("generation_failed", False):
+        return "collect_results"
+    review_status = state.get("review_status", "approved")
+    if review_status == "regenerate":
+        return "generate_cases"
+    if review_status == "approved":
+        return "execute_cases"
+    return "collect_results"

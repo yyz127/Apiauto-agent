@@ -1,15 +1,23 @@
 # Apiauto-agent
 
-接口测试智能体：输入 OpenAPI/Swagger YAML，通过 LLM 自动生成测试用例并执行。基于 LangGraph 图引擎驱动完整测试流程。
+接口测试智能体：输入 OpenAPI/Swagger YAML，通过 LLM 自动生成测试用例，并通过 LangGraph 图引擎驱动完整测试流程。
 
 ## 功能
 
 - 解析 OpenAPI 3.x / Swagger 2.0
 - LLM 驱动的测试用例自动生成（正常 / 异常）
+- 生成结果的最小有效性检查
 - 支持执行模式：`mock`（默认）/ `api`（真实接口）
-- 基于 LangGraph 的图引擎编排，支持可观测性与条件路由
+- 基于 LangGraph 的图引擎编排，支持条件路由
 - 可选人工审核（`--human-review`）
+- 人工审核可反馈问题并驱动 LLM 重新生成用例
 - JSON 报告输出
+
+## 当前入口
+
+- 完整执行入口：`ApiTestAgent.run_graph()`
+- 仅生成入口：`ApiTestAgent.generate_only()`
+- CLI 默认走完整图流程，不存在 `--use-graph` 开关
 
 ## 安装
 
@@ -45,6 +53,11 @@ python -m apiauto_agent examples/petstore.yaml \
   --llm-api-url http://localhost:8000/v1/chat/completions \
   --human-review
 ```
+
+启用后，终端会在每个接口生成并校验完成后展示用例列表。人工可选择：
+- `a`：审核通过，继续执行
+- `f`：输入反馈问题，返回 LLM 重新生成
+- `r`：拒绝当前接口，标记为生成失败并跳过执行
 
 指定 API Key 和模型：
 
@@ -119,7 +132,14 @@ python -m apiauto_agent examples/petstore.yaml \
 | `uuid` | string | 测试任务唯一标识 |
 | `env` | string | 环境标识（dev / uat / test） |
 
-接口A是异步执行的，接收请求后立即返回，测试完成后通过回调通知结果。
+接口A当前按同步方式返回结果。仓库中的 Java `TestReportController.java` 已改为：
+
+- 接收 `ReportGenerateRequest`
+- 同步调用 `generatReport(...).get()`
+- 成功直接返回 `Result.ok(result)`
+- 不再使用回调
+
+如果某个接口的 LLM 用例生成失败，Agent 会将该接口显式标记为“生成失败”，并跳过执行阶段，不会进入伪成功报告。
 
 ## 架构
 
@@ -127,21 +147,40 @@ python -m apiauto_agent examples/petstore.yaml \
 
 ```
 START → parse_yaml → select_endpoint → generate_cases
-      → review_cases → execute_cases → collect_results
+      → [生成成功?] → review_cases / collect_results
+      → [审核结果] → execute_cases / generate_cases / collect_results
       → [has_more_endpoints?] → select_endpoint / generate_report → END
 ```
+
+其中：
+
+- `generate_cases` 节点负责调用 LLM，并完成最小有效性检查
+- `review_cases` 节点负责人工审核通过 / 反馈重生成 / 拒绝
+- `collect_results` 节点负责汇总接口级报告并推进到下一个接口
+
+## 当前限制
+
+以下是当前代码里的真实限制：
+
+1. 图模式没有单独的 YAML 解析失败终止分支
+2. `ApiExecutor` 还没有独立的请求渲染层，`path/query/header/body` 没有严格拆分
+3. `ApiExecutor` 当前仍以 `status_code < 500` 作为成功判定
+4. `requestBody` 仍然只取第一个 `content-type`
 
 ## 项目结构
 
 ```
 apiauto_agent/
 ├── cli.py             # 命令行入口
-├── agent.py           # Agent 主逻辑
+├── agent.py           # Agent 入口和报告对象
+├── case_checks.py     # 生成结果校验
+├── endpoint_workflow.py # 单接口业务逻辑
 ├── parser.py          # OpenAPI/Swagger 解析
 ├── llm_generator.py   # LLM 用例生成
-├── generator.py       # 生成器接口
+├── generator.py       # 规则生成器
 ├── executor.py        # 用例执行（Mock / 接口A）
 ├── graph.py           # LangGraph 图定义
 ├── nodes.py           # 图节点实现
-└── state.py           # 图状态定义
+├── state.py           # 图状态定义
+└── TestReportController.java # 接口A Java 控制器示例
 ```

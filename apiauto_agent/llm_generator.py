@@ -12,6 +12,10 @@ from .parser import EndpointInfo
 
 logger = logging.getLogger(__name__)
 
+
+class CaseGenerationError(Exception):
+    """LLM 用例生成失败。"""
+
 # ── 系统提示词 ──
 
 SYSTEM_PROMPT = """\
@@ -78,8 +82,18 @@ class LLMCaseGenerator:
     def generate_cases(self, endpoint: EndpointInfo, case_type: str = "all") -> list[TestCase]:
         if case_type not in {"all", "normal", "abnormal"}:
             raise ValueError(f"不支持的case_type: {case_type}")
+        return self.generate_cases_with_feedback(endpoint, case_type=case_type, review_feedback="")
 
-        prompt = self._build_prompt(endpoint, case_type)
+    def generate_cases_with_feedback(
+        self,
+        endpoint: EndpointInfo,
+        case_type: str = "all",
+        review_feedback: str = "",
+    ) -> list[TestCase]:
+        if case_type not in {"all", "normal", "abnormal"}:
+            raise ValueError(f"不支持的case_type: {case_type}")
+
+        prompt = self._build_prompt(endpoint, case_type, review_feedback=review_feedback)
         payload = {
             "model": self.model,
             "messages": [
@@ -110,19 +124,21 @@ class LLMCaseGenerator:
                     continue
                 raw_cases = self._extract_json(content)
                 cases = self._to_test_cases(raw_cases, endpoint)
-                if cases:
-                    logger.info("LLM生成 %d 个用例 (第%d次尝试)", len(cases), attempt)
-                    return cases
-                logger.warning("LLM返回JSON为空数组 (第%d次尝试)", attempt)
-                last_error = "LLM返回空数组"
+                if not cases:
+                    logger.warning("LLM返回JSON为空数组 (第%d次尝试)", attempt)
+                    last_error = "LLM返回空数组"
+                    continue
+                logger.info("LLM生成 %d 个用例 (第%d次尝试)", len(cases), attempt)
+                return cases
             except (requests.RequestException, json.JSONDecodeError, ValueError, KeyError, IndexError, TypeError) as e:
                 logger.warning("LLM生成用例失败 (第%d次尝试): %s", attempt, e)
                 last_error = str(e)
 
-        logger.error("LLM生成用例最终失败，共尝试%d次，最后错误: %s", self.max_retries, last_error)
-        return []
+        error_message = last_error or "LLM未返回有效用例"
+        logger.error("LLM生成用例最终失败，共尝试%d次，最后错误: %s", self.max_retries, error_message)
+        raise CaseGenerationError(error_message)
 
-    def _build_prompt(self, endpoint: EndpointInfo, case_type: str) -> str:
+    def _build_prompt(self, endpoint: EndpointInfo, case_type: str, review_feedback: str = "") -> str:
         # 构建参数信息，过滤掉 None 值以减少 token 消耗
         params_desc = []
         for p in endpoint.parameters:
@@ -191,11 +207,19 @@ class LLMCaseGenerator:
             "abnormal": "请只生成异常用例（case_type=\"abnormal\"），覆盖各类错误输入场景。",
         }
 
-        return (
+        prompt = (
             f"请为以下 API 接口生成测试用例。\n\n"
             f"**生成要求**: {case_type_instruction[case_type]}\n\n"
             f"**接口定义**:\n```json\n{json.dumps(endpoint_desc, ensure_ascii=False, indent=2)}\n```"
         )
+        if review_feedback.strip():
+            prompt += (
+                "\n\n"
+                "### 人工审核反馈\n"
+                "以下是上一轮生成结果的人工审核问题，请严格根据这些问题修正并重新生成完整用例集：\n"
+                f"{review_feedback.strip()}\n"
+            )
+        return prompt
 
     @staticmethod
     def _extract_json(content: str) -> list[dict[str, Any]]:
